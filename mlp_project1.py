@@ -38,16 +38,20 @@ torch.manual_seed(SEED)
 np.random.seed(SEED)
 
 # Hiperparametros do baseline.
-# NOTA DIDATICA: a entrega original usava lr=0.01 e 500 epocas, e o baseline
-# mal saia do lugar (R2 ~ -0.05). Uma varredura empirica (ver relatorio) mostrou
-# que o gargalo NAO era a arquitetura, e sim CONVERGENCIA insuficiente: com SGD
-# puro, poucas epocas e passo pequeno, a rede so aprende a tendencia de baixa
-# frequencia. Aumentar o passo e o numero de epocas (sem mudar a arquitetura,
-# sem momentum e sem regularizacao) ja destrava o aprendizado. Isso mantem o
-# baseline VANILLA e ao mesmo tempo o torna um ponto de partida honesto para a
-# ablacao. O numero de epocas NAO e parte da arquitetura, entao ajusta-lo nao
-# viola a restricao "modelos aditivados nao mudam a arquitetura".
-LR = 0.05
+# NOTA DIDATICA (learning rate): a entrega original usava lr=0.01 e 500 epocas,
+# e o baseline mal saia do lugar. Ao aumentar epocas percebeu-se que o gargalo
+# era CONVERGENCIA, nao a arquitetura. Uma primeira correcao usou lr=0.05, o que
+# destravou o aprendizado MAS deixou a curva de perda muito instavel (serrilhada,
+# com picos): passo grande + batch pequeno (10) faz o SGD passar do ponto
+# (overshoot) e "quicar" em torno do minimo, em vez de descer suave.
+#
+# Uma varredura de lr (ver relatorio) mediu o "jitter" (desvio das oscilacoes
+# epoca-a-epoca) e mostrou o trade-off:
+#     lr=0.05 -> jitter 0.030 (curva feia)   ; lr=0.01 -> jitter 0.017 (~45% menor)
+# Adotou-se lr=0.01 como equilibrio: treino visivelmente mais estavel, mantendo
+# convergencia saudavel. Passo e numero de epocas NAO fazem parte da arquitetura,
+# entao ajusta-los nao viola a restricao "os aditivados nao mudam a arquitetura".
+LR = 0.01
 EPOCAS = 3000
 BATCH_SIZE = 10
 N_NEURONIOS = 64
