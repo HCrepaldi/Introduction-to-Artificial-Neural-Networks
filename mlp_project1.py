@@ -1,220 +1,376 @@
 # ==============================================================================
-# PROJETO 1 - REGRESSÃO COM MLP (ESTUDO DE BASELINE E ABLAÇÃO)
+# PROJETO 1 - REGRESSAO COM MLP (BASELINE VANILLA + ESTUDO DE ABLACAO)
+# ------------------------------------------------------------------------------
+# Disciplina: Introducao as Redes Neurais Artificiais
+# Autor: Henrique Crepaldi (RA: 120410)
+#
+# Objetivo deste script (versao pos-entrega, com foco DIDATICO):
+#   Entender O QUE acontece com o baseline (R2 negativo -> subajuste),
+#   COMO acontece (a Tanh satura no dominio [0, 10]) e
+#   COMO resolver (padronizacao da entrada SEM vazamento: fit so no treino).
+#
+# Requisitos do professor respeitados:
+#   - Tarefa de regressao com o dataset compartilhado (dataset_projeto1.csv)
+#   - Split 10% treino / 10% validacao / 80% teste
+#   - Baseline VANILLA: MLP basica, SGD PURO (sem Adam), sem momentum,
+#     sem regularizacao, sem gradient clipping, sem init manual "esperta".
+#   - Ablacao: L1, L2, dropout, momentum avaliados ISOLADAMENTE, com a
+#     MESMA arquitetura e o MESMO protocolo de treino do baseline.
+#   - Metricas: MAE, MSE, RMSE, R2.
+#   - Graficos da evolucao treino/validacao.
 # ==============================================================================
 
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import matplotlib.pyplot as plt
 
 # ------------------------------------------------------------------------------
-# 1. FIXANDO SEMENTES ALEATÓRIAS
+# 1. REPRODUTIBILIDADE
 # ------------------------------------------------------------------------------
-# Aqui eu fixo a semente para garantir reprodutibilidade dos resultados
 SEED = 42
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 
-# ------------------------------------------------------------------------------
-# 2. CARREGAMENTO E DIVISÃO DOS DADOS
-# ------------------------------------------------------------------------------
-# Leio o dataset disponibilizado
-df = pd.read_csv("dataset_projeto1.csv")
+# Hiperparametros do baseline.
+# NOTA DIDATICA: a entrega original usava lr=0.01 e 500 epocas, e o baseline
+# mal saia do lugar (R2 ~ -0.05). Uma varredura empirica (ver relatorio) mostrou
+# que o gargalo NAO era a arquitetura, e sim CONVERGENCIA insuficiente: com SGD
+# puro, poucas epocas e passo pequeno, a rede so aprende a tendencia de baixa
+# frequencia. Aumentar o passo e o numero de epocas (sem mudar a arquitetura,
+# sem momentum e sem regularizacao) ja destrava o aprendizado. Isso mantem o
+# baseline VANILLA e ao mesmo tempo o torna um ponto de partida honesto para a
+# ablacao. O numero de epocas NAO e parte da arquitetura, entao ajusta-lo nao
+# viola a restricao "modelos aditivados nao mudam a arquitetura".
+LR = 0.05
+EPOCAS = 3000
+BATCH_SIZE = 10
+N_NEURONIOS = 64
 
-X = df[['x']].values.astype(np.float32)
-y = df[['y']].values.astype(np.float32)
-
-# Divisão solicitada: 10% Treino, 10% Validação e 80% Teste
-X_temp, X_test, y_temp, y_test = train_test_split(
-    X, y, test_size=0.80, random_state=SEED
-)
-
-X_train, X_val, y_train, y_val = train_test_split(
-    X_temp, y_temp, test_size=0.50, random_state=SEED
-)
-
-print(f"[INFO] Amostras carregadas:")
-print(f"       Treino:    {len(X_train)} (10%)")
-print(f"       Validação: {len(X_val)} (10%)")
-print(f"       Teste:     {len(X_test)} (80%)")
-
-# DataLoaders para alimentar a rede em pequenos lotes (mini-batches)
-train_dataset = TensorDataset(torch.tensor(X_train), torch.tensor(y_train))
-train_loader = DataLoader(train_dataset, batch_size=10, shuffle=True)
 
 # ------------------------------------------------------------------------------
-# 3. DEFINIÇÃO DA ARQUITETURA DA REDE MLP
+# 2. CARREGAMENTO E PARTICAO DOS DADOS (10% / 10% / 80%)
 # ------------------------------------------------------------------------------
-# Minha rede tem 2 camadas ocultas de 64 neurônios com ativação Tanh()
-class MinhaMLP(nn.Module):
-    def __init__(self, taxa_dropout=0.0):
-        super(MinhaMLP, self).__init__()
+def carregar_e_particionar(caminho_csv="dataset_projeto1.csv"):
+    """Le o dataset e devolve os splits treino/validacao/teste em float32.
+
+    O particionamento e feito ANTES de qualquer calculo de estatistica, para
+    que a padronizacao (aplicada depois) nao sofra vazamento de informacao do
+    conjunto de teste para o treino.
+    """
+    df = pd.read_csv(caminho_csv)
+    X = df[["x"]].values.astype(np.float32)
+    y = df[["y"]].values.astype(np.float32)
+
+    # 80% para teste; os 20% restantes sao divididos meio a meio (10% / 10%).
+    X_temp, X_test, y_temp, y_test = train_test_split(
+        X, y, test_size=0.80, random_state=SEED
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_temp, y_temp, test_size=0.50, random_state=SEED
+    )
+    return X_train, X_val, X_test, y_train, y_val, y_test
+
+
+# ------------------------------------------------------------------------------
+# 3. PADRONIZACAO SEM VAZAMENTO
+# ------------------------------------------------------------------------------
+# POR QUE PADRONIZAR? A entrada x vive em [0, 10]. A funcao Tanh satura
+# (fica "grudada" em +-1) para |z| grande, e com pesos iniciais pequenos o
+# gradiente que chega na primeira camada quase zera -> a rede mal aprende.
+# Centralizar x (media 0, desvio 1) mantem as ativacoes na regiao linear da
+# Tanh, onde o gradiente flui. O professor permite normalizar DESDE QUE
+# justificado; aqui a media/desvio sao calculados APENAS no treino (sem
+# vazamento) e reaplicados em validacao e teste.
+class PadronizadorTreino:
+    def __init__(self, X_train):
+        self.media = X_train.mean(axis=0, keepdims=True)
+        self.desvio = X_train.std(axis=0, keepdims=True) + 1e-8
+
+    def aplicar(self, X):
+        return ((X - self.media) / self.desvio).astype(np.float32)
+
+
+# ------------------------------------------------------------------------------
+# 4. ARQUITETURA DA MLP (identica para baseline e modelos aditivados)
+# ------------------------------------------------------------------------------
+# Entrada(1) -> Densa(64) -> Tanh -> Densa(64) -> Tanh -> Saida(1)
+# Inicializacao PADRAO do PyTorch (sem "pulo do gato"): o baseline precisa ser
+# honesto. O unico componente opcional e o Dropout, que fica p=0.0 no baseline
+# e nos modelos que nao o utilizam (Dropout(0.0) e identidade / no-op).
+class MLP(nn.Module):
+    def __init__(self, n_neuronios=N_NEURONIOS, dropout=0.0):
+        super().__init__()
         self.rede = nn.Sequential(
-            nn.Linear(1, 64),
+            nn.Linear(1, n_neuronios),
             nn.Tanh(),
-            nn.Dropout(taxa_dropout),
-            nn.Linear(64, 64),
+            nn.Dropout(dropout),
+            nn.Linear(n_neuronios, n_neuronios),
             nn.Tanh(),
-            nn.Dropout(taxa_dropout),
-            nn.Linear(64, 1)
+            nn.Dropout(dropout),
+            nn.Linear(n_neuronios, 1),
         )
-        
+
     def forward(self, x):
         return self.rede(x)
 
+
 # ------------------------------------------------------------------------------
-# 4. FUNÇÃO DE TREINAMENTO E VALIDAÇÃO COM GRADIENT CLIPPING
+# 5. TREINAMENTO (protocolo unico e justo para todos os modelos)
 # ------------------------------------------------------------------------------
-def treinar_modelo(nome, modelo, otimizador, epocas=500, lambda_l1=0.0):
-    funcao_custo = nn.MSELoss()
-    perdas_treino = []
-    perdas_val = []
-    
-    for epoca in range(epocas):
+def treinar(modelo, otimizador, train_loader, X_val_t, y_val_t,
+            n_train, epocas=EPOCAS, lambda_l1=0.0):
+    """Treina o modelo por um numero fixo de epocas (sem early stopping, para
+    que a comparacao entre baseline e aditivados seja justa).
+
+    Retorna os historicos de perda de treino e de validacao (MSE puro, sem a
+    penalidade L1, para que as curvas sejam comparaveis entre si).
+    """
+    criterio = nn.MSELoss()
+    hist_treino, hist_val = [], []
+
+    for _ in range(epocas):
         modelo.train()
-        custo_acumulado = 0.0
-        
-        for lote_x, lote_y in train_loader:
+        soma_mse = 0.0
+        for bx, by in train_loader:
             otimizador.zero_grad()
-            predicoes = modelo(lote_x)
-            perda = funcao_custo(predicoes, lote_y)
-            
-            # Penalidade L1 (se configurada)
+            pred = modelo(bx)
+            perda = criterio(pred, by)
+
+            # Perda REAL de treino (so MSE), registrada antes de somar L1.
+            soma_mse += perda.item() * len(bx)
+
+            # Penalidade L1 aplicada SOMENTE aos pesos (nunca aos bias).
             if lambda_l1 > 0.0:
-                penalidade_l1 = sum(torch.sum(torch.abs(p)) for p in modelo.parameters())
-                perda += lambda_l1 * penalidade_l1
-                
+                l1 = sum(
+                    p.abs().sum()
+                    for nome, p in modelo.named_parameters()
+                    if "weight" in nome
+                )
+                perda = perda + lambda_l1 * l1
+
             perda.backward()
-            
-            # BLINDAGEM: Gradient Clipping para evitar explosão de gradientes (NaN) com Momentum
-            torch.nn.utils.clip_grad_norm_(modelo.parameters(), max_norm=1.0)
-            
             otimizador.step()
-            custo_acumulado += perda.item() * len(lote_x)
-            
-        custo_medio_treino = custo_acumulado / len(X_train)
-        perdas_treino.append(custo_medio_treino)
-        
-        # Avaliação na Validação
+
+        hist_treino.append(soma_mse / n_train)
+
         modelo.eval()
         with torch.no_grad():
-            pred_val = modelo(torch.tensor(X_val))
-            custo_val = funcao_custo(pred_val, torch.tensor(y_val)).item()
-            perdas_val.append(custo_val)
-            
-    return perdas_treino, perdas_val
+            hist_val.append(criterio(modelo(X_val_t), y_val_t).item())
+
+    return hist_treino, hist_val
+
+
+def melhor_epoca(hist_val):
+    """Epoca em que a perda de validacao foi minima (indicador de overfitting:
+    se ela ocorre bem antes do fim, treinar mais so piora a generalizacao)."""
+    return int(np.argmin(hist_val))
+
 
 # ------------------------------------------------------------------------------
-# 5. CÁLCULO DAS MÉTRICAS (MAE, MSE, RMSE, R2)
+# 6. METRICAS (MAE, MSE, RMSE, R2)
 # ------------------------------------------------------------------------------
-def calcular_metricas(modelo, X_dados, y_dados):
+def metricas(modelo, X_t, y_np):
     modelo.eval()
     with torch.no_grad():
-        y_pred = modelo(torch.tensor(X_dados)).numpy()
-        
-    mae = mean_absolute_error(y_dados, y_pred)
-    mse = mean_squared_error(y_dados, y_pred)
-    rmse = np.sqrt(mse)
-    r2 = r2_score(y_dados, y_pred)
-    return mae, mse, rmse, r2, y_pred
+        y_pred = modelo(X_t).numpy()
+    mse = mean_squared_error(y_np, y_pred)
+    return {
+        "MAE": mean_absolute_error(y_np, y_pred),
+        "MSE": mse,
+        "RMSE": float(np.sqrt(mse)),
+        "R2": r2_score(y_np, y_pred),
+    }
+
 
 # ------------------------------------------------------------------------------
-# 6. CONFIGURAÇÃO DO BASELINE E ESTUDO DE ABLAÇÃO
+# 7. UTILITARIO: treina UM modelo do zero (semente fixa => mesma inicializacao)
 # ------------------------------------------------------------------------------
-# Usei lr=0.01 que garante estabilidade para todos os experimentos
-experimentos = {
-    "Baseline (SGD Puro)": {"lr": 0.01, "momentum": 0.0, "l2": 0.0,  "l1": 0.0,   "dropout": 0.0},
-    "+ Momentum":          {"lr": 0.01, "momentum": 0.9, "l2": 0.0,  "l1": 0.0,   "dropout": 0.0},
-    "+ L2 (Weight Decay)": {"lr": 0.01, "momentum": 0.0, "l2": 1e-3, "l1": 0.0,   "dropout": 0.0},
-    "+ L1":                {"lr": 0.01, "momentum": 0.0, "l2": 0.0,  "l1": 1e-4,  "dropout": 0.0},
-    "+ Dropout":           {"lr": 0.01, "momentum": 0.0, "l2": 0.0,  "l1": 0.0,   "dropout": 0.05}
-}
+def rodar_experimento(cfg, X_train_np, y_train_np, X_val_np, y_val_np):
+    """Cria a MLP, o otimizador SGD e treina segundo a configuracao cfg."""
+    torch.manual_seed(SEED)  # todos partem da MESMA inicializacao de pesos
 
-tabela_metricas = {}
-historicos = {}
-modelos_treinados = {}
-EPOCAS = 500
-
-print("\n[INFO] Treinando os modelos...")
-
-for nome_exp, config in experimentos.items():
-    torch.manual_seed(SEED) # Mesma inicialização para todos
-    
-    modelo = MinhaMLP(taxa_dropout=config["dropout"])
+    modelo = MLP(dropout=cfg["dropout"])
     otimizador = optim.SGD(
         modelo.parameters(),
-        lr=config["lr"],
-        momentum=config["momentum"],
-        weight_decay=config["l2"]
+        lr=LR,
+        momentum=cfg["momentum"],
+        weight_decay=cfg["l2"],  # weight_decay == regularizacao L2 no SGD
     )
-    
-    treino_loss, val_loss = treinar_modelo(
-        nome_exp, modelo, otimizador, epocas=EPOCAS, lambda_l1=config["l1"]
+
+    X_train_t = torch.tensor(X_train_np)
+    y_train_t = torch.tensor(y_train_np)
+    X_val_t = torch.tensor(X_val_np)
+    y_val_t = torch.tensor(y_val_np)
+
+    loader = DataLoader(
+        TensorDataset(X_train_t, y_train_t),
+        batch_size=BATCH_SIZE,
+        shuffle=True,
     )
-    
-    mae, mse, rmse, r2, _ = calcular_metricas(modelo, X_test, y_test)
-    
-    tabela_metricas[nome_exp] = {"MAE": mae, "MSE": mse, "RMSE": rmse, "R²": r2}
-    historicos[nome_exp] = (treino_loss, val_loss)
-    modelos_treinados[nome_exp] = modelo
-    print(f"  -> Concluído: {nome_exp}")
+
+    hist_tr, hist_val = treinar(
+        modelo, otimizador, loader, X_val_t, y_val_t,
+        n_train=len(X_train_np), lambda_l1=cfg["l1"],
+    )
+    return modelo, hist_tr, hist_val
+
+
+# ==============================================================================
+# 8. EXECUCAO PRINCIPAL
+# ==============================================================================
+def main():
+    X_train, X_val, X_test, y_train, y_val, y_test = carregar_e_particionar()
+
+    print("[INFO] Particao dos dados:")
+    print(f"       Treino:    {len(X_train)} amostras (10%)")
+    print(f"       Validacao: {len(X_val)} amostras (10%)")
+    print(f"       Teste:     {len(X_test)} amostras (80%)\n")
+
+    # --------------------------------------------------------------------------
+    # 8.1. DEMONSTRACAO DIDATICA: o baseline SEM padronizacao (reproduz a
+    #      entrega original) vs. o baseline COM padronizacao.
+    # --------------------------------------------------------------------------
+    cfg_baseline = {"momentum": 0.0, "l2": 0.0, "l1": 0.0, "dropout": 0.0}
+
+    print("[INFO] (1/2) Baseline SEM padronizacao (escala original [0, 10])...")
+    mod_raw, hist_tr_raw, hist_val_raw = rodar_experimento(
+        cfg_baseline, X_train, y_train, X_val, y_val
+    )
+    m_raw = metricas(mod_raw, torch.tensor(X_test), y_test)
+    print(f"       -> R2 teste = {m_raw['R2']:.4f} (subajuste: Tanh satura)\n")
+
+    print("[INFO] (2/2) Baseline COM padronizacao (fit so no treino)...")
+    padr = PadronizadorTreino(X_train)
+    Xtr_s = padr.aplicar(X_train)
+    Xval_s = padr.aplicar(X_val)
+    Xtest_s = padr.aplicar(X_test)
+
+    mod_std, hist_tr_std, hist_val_std = rodar_experimento(
+        cfg_baseline, Xtr_s, y_train, Xval_s, y_val
+    )
+    m_std = metricas(mod_std, torch.tensor(Xtest_s), y_test)
+    print(f"       -> R2 teste = {m_std['R2']:.4f} (agora a rede aprende)\n")
+
+    # --------------------------------------------------------------------------
+    # 8.2. ESTUDO DE ABLACAO (sobre os dados PADRONIZADOS)
+    #      Mesma arquitetura e protocolo; muda-se UM componente por vez.
+    # --------------------------------------------------------------------------
+    experimentos = {
+        "Baseline (SGD puro)":  {"momentum": 0.0, "l2": 0.0,  "l1": 0.0,   "dropout": 0.0},
+        "+ Momentum (0.9)":     {"momentum": 0.9, "l2": 0.0,  "l1": 0.0,   "dropout": 0.0},
+        "+ L2 (1e-3)":          {"momentum": 0.0, "l2": 1e-3, "l1": 0.0,   "dropout": 0.0},
+        "+ L1 (1e-4)":          {"momentum": 0.0, "l2": 0.0,  "l1": 1e-4,  "dropout": 0.0},
+        "+ Dropout (0.05)":     {"momentum": 0.0, "l2": 0.0,  "l1": 0.0,   "dropout": 0.05},
+    }
+
+    print("[INFO] Estudo de ablacao (dados padronizados)...")
+    tabela, historicos, modelos = {}, {}, {}
+    for nome, cfg in experimentos.items():
+        modelo, hist_tr, hist_val = rodar_experimento(
+            cfg, Xtr_s, y_train, Xval_s, y_val
+        )
+        met = metricas(modelo, torch.tensor(Xtest_s), y_test)
+        met["Melhor epoca (val)"] = melhor_epoca(hist_val)
+        tabela[nome] = met
+        historicos[nome] = (hist_tr, hist_val)
+        modelos[nome] = modelo
+        print(f"       -> {nome:22s} R2 = {met['R2']:.4f}  "
+              f"(melhor val na epoca {met['Melhor epoca (val)']})")
+
+    # --------------------------------------------------------------------------
+    # 8.3. TABELAS DE RESULTADOS
+    # --------------------------------------------------------------------------
+    df_antes_depois = pd.DataFrame(
+        {"Sem padronizacao": m_raw, "Com padronizacao": m_std}
+    ).T
+    print("\n" + "=" * 70)
+    print("EFEITO DA PADRONIZACAO NO BASELINE (Conjunto de Teste - 80%)")
+    print("=" * 70)
+    print(df_antes_depois.round(4))
+
+    df_abl = pd.DataFrame(tabela).T
+    print("\n" + "=" * 70)
+    print("ESTUDO DE ABLACAO (Conjunto de Teste - 80%, dados padronizados)")
+    print("=" * 70)
+    print(df_abl.round(4))
+    print("=" * 70 + "\n")
+
+    # --------------------------------------------------------------------------
+    # 8.4. GRAFICOS
+    # --------------------------------------------------------------------------
+    gerar_graficos(
+        X_train, y_train, X_test, y_test, padr,
+        hist_tr_raw, hist_val_raw, hist_tr_std, hist_val_std,
+        historicos, modelos,
+    )
+    print("[OK] Graficos salvos com sucesso.")
+
 
 # ------------------------------------------------------------------------------
-# 7. EXIBIÇÃO DA TABELA DE RESULTADOS
+# 9. GRAFICOS (didaticos)
 # ------------------------------------------------------------------------------
-df_metricas = pd.DataFrame(tabela_metricas).T
-print("\n" + "="*65)
-print("TABELA COMPARATIVA FINAL (Conjunto de Teste - 80%)")
-print("="*65)
-print(df_metricas.round(4))
-print("="*65)
+def gerar_graficos(X_train, y_train, X_test, y_test, padr,
+                   hist_tr_raw, hist_val_raw, hist_tr_std, hist_val_std,
+                   historicos, modelos):
+    # --- Grafico A: treino vs validacao, SEM vs COM padronizacao ---
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
+    axes[0].plot(hist_tr_raw, label="Treino")
+    axes[0].plot(hist_val_raw, label="Validacao")
+    axes[0].set_title("Baseline SEM padronizacao (subajuste)")
+    axes[0].set_xlabel("Epocas"); axes[0].set_ylabel("MSE")
+    axes[0].legend(); axes[0].grid(True, ls="--", alpha=0.5)
 
-# ------------------------------------------------------------------------------
-# 8. GERAÇÃO DOS GRÁFICOS
-# ------------------------------------------------------------------------------
-print("\n[INFO] Gerando gráficos...")
+    axes[1].plot(hist_tr_std, label="Treino")
+    axes[1].plot(hist_val_std, label="Validacao")
+    axes[1].set_title("Baseline COM padronizacao (aprende)")
+    axes[1].set_xlabel("Epocas")
+    axes[1].legend(); axes[1].grid(True, ls="--", alpha=0.5)
+    fig.suptitle("Evolucao do Treinamento (Treino vs. Validacao)")
+    fig.tight_layout()
+    fig.savefig("grafico_curvas_aprendizado.png", dpi=150)
+    plt.close(fig)
 
-# 1. Curvas de perda na validação
-plt.figure(figsize=(10, 5))
-for nome_exp, (_, v_loss) in historicos.items():
-    plt.plot(v_loss, label=f'{nome_exp}')
-plt.title("Evolução da Perda (MSE) na Validação ao Longo das Épocas")
-plt.xlabel("Épocas")
-plt.ylabel("MSE Loss")
-plt.ylim(0, 1.5)  # Limito o eixo Y para o gráfico ficar legível
-plt.legend()
-plt.grid(True, linestyle='--', alpha=0.6)
-plt.tight_layout()
-plt.savefig("grafico_curvas_aprendizado.png", dpi=300)
-plt.close()
+    # --- Grafico B: comparacao da perda de validacao na ablacao ---
+    plt.figure(figsize=(11, 5))
+    for nome, (_, v) in historicos.items():
+        plt.plot(v, label=nome)
+    plt.title("Ablacao: Perda de Validacao (MSE) ao Longo das Epocas")
+    plt.xlabel("Epocas"); plt.ylabel("MSE de Validacao")
+    plt.legend(); plt.grid(True, ls="--", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig("grafico_ablation_loss.png", dpi=150)
+    plt.close()
 
-# 2. Curva de predição sobre os dados reais
-indices_ord = np.argsort(X.flatten())
-X_plot = X[indices_ord]
+    # --- Grafico C: ajuste da curva sobre todos os dados ---
+    X_all = np.concatenate([X_train, X_test], axis=0)
+    y_all = np.concatenate([y_train, y_test], axis=0)
+    ordem = np.argsort(X_all.flatten())
+    X_plot = X_all[ordem]
+    X_plot_s = torch.tensor(padr.aplicar(X_plot))
 
-plt.figure(figsize=(12, 6))
-plt.scatter(X, y, color='lightgray', s=15, label='Conjunto Total (80% Teste)')
-plt.scatter(X_train, y_train, color='red', s=35, label='Pontos de Treino (10%)', zorder=5)
+    plt.figure(figsize=(13, 6))
+    plt.scatter(X_test, y_test, color="lightgray", s=15, label="Teste (80%)")
+    plt.scatter(X_train, y_train, color="red", s=40, zorder=5,
+                label="Treino (10%)")
+    for nome in ["Baseline (SGD puro)", "+ Momentum (0.9)"]:
+        m = modelos[nome]
+        m.eval()
+        with torch.no_grad():
+            curva = m(X_plot_s).numpy()
+        plt.plot(X_plot, curva, linewidth=2.5, label=f"Predicao {nome}")
+    plt.title("Regressao com MLP (entrada padronizada): ajuste dos modelos")
+    plt.xlabel("X"); plt.ylabel("Y")
+    plt.legend(); plt.grid(True, ls="--", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig("grafico_ajuste_regressao.png", dpi=150)
+    plt.close()
 
-for nome_exp in ["Baseline (SGD Puro)", "+ Momentum"]:
-    mod = modelos_treinados[nome_exp]
-    mod.eval()
-    with torch.no_grad():
-        curva_predita = mod(torch.tensor(X_plot)).numpy()
-    plt.plot(X_plot, curva_predita, linewidth=2.5, label=f'Predição {nome_exp}')
 
-plt.title("Regressão da Função: Comparação do Ajuste dos Modelos")
-plt.xlabel("X")
-plt.ylabel("Y")
-plt.legend()
-plt.grid(True, linestyle='--', alpha=0.6)
-plt.tight_layout()
-plt.savefig("grafico_ajuste_regressao.png", dpi=300)
-plt.close()
-
-print("[INFO] Gráficos salvos com sucesso na sua pasta!")
+if __name__ == "__main__":
+    main()

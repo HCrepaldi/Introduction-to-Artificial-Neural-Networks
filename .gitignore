@@ -1,0 +1,5 @@
+# Ambiente virtual e artefatos locais
+.venv/
+.python-version
+__pycache__/
+*.pyc
