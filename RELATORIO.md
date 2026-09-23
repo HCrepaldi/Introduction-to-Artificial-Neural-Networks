@@ -46,8 +46,10 @@ Duas causas se somam:
 1. **Saturação da Tanh.** Com x ∈ [0, 10] e pesos iniciais pequenos, as pré-ativações podem
    cair na região plana da Tanh (perto de ±1), onde a derivada é ~0. O gradiente que volta
    para a primeira camada quase zera e a rede "não anda".
-2. **Convergência insuficiente.** Com SGD puro, passo pequeno (`lr=0.01`) e poucas épocas
-   (500), mesmo sem saturação a rede não teria tempo de ajustar as oscilações.
+2. **Convergência insuficiente.** Com SGD puro, passo pequeno (`lr=0.01`) e **poucas épocas
+   (500)**, mesmo sem saturação a rede não teria tempo de ajustar as oscilações. (Note: o
+   problema original não era o `lr=0.01` em si, e sim o número baixo de épocas — ver seções 3.2
+   e 3.3.)
 
 ---
 
@@ -83,30 +85,58 @@ Observações:
 - **Épocas demais pioram** (lr=0.10 + 8000 → R² negativo de novo). Aqui o problema deixa de ser
   subajuste e passa a ser **sobreajuste** — e é exatamente aí que a regularização faz sentido.
 
-**Configuração adotada no baseline final:** `lr = 0.05`, `epocas = 3000` (SGD puro).
+Uma primeira correção usou `lr = 0.05`, que destravou o aprendizado. Porém, ao inspecionar a
+curva de perda, notou-se um problema levantado em orientação: **a curva oscilava demais**
+(serrilhada, com picos), sinal de learning rate ainda alto. Isso motivou a análise da seção 3.3.
+
+### 3.3. O learning rate e a estabilidade do treino
+
+Com passo grande (`lr=0.05`) e **batch pequeno (10 amostras)**, o gradiente estimado tem alta
+variância; a cada atualização o SGD "passa do ponto" (*overshoot*) e a perda de validação fica
+**quicando** em torno do mínimo, em vez de descer suave. Para quantificar isso, mediu-se o
+*jitter* — o desvio-padrão das variações de perda de época para época na segunda metade do
+treino (quanto maior, mais serrilhada é a curva):
+
+| lr     | R² (teste) | Jitter (variação) | Melhor época (val) |
+|--------|------------|-------------------|--------------------|
+| 0.05   | 0.19       | 0.0297 (instável) | 750                |
+| 0.02   | 0.13       | 0.0302            | 750                |
+| **0.01** | **0.06**  | **0.0169 (~45% menor)** | 1179          |
+| 0.005  | 0.05       | 0.0047 (bem suave)| 2472               |
+| 0.002  | 0.004      | 0.0007 (super liso)| 2980              |
+
+Há um **trade-off** claro: abaixar o `lr` reduz drasticamente a instabilidade, mas passos muito
+pequenos deixam o SGD puro lento demais para escapar de mínimos rasos em 3000 épocas, derrubando
+o R². O `lr=0.05` só alcançava R² alto **às custas** de um treino instável — ou seja, o "bom"
+resultado dependia de onde o quicar parava, não de convergência confiável.
+
+**Configuração adotada no baseline final:** `lr = 0.01`, `epocas = 3000` (SGD puro). É o ponto
+de equilíbrio: curva visivelmente mais estável (jitter ~45% menor que com `lr=0.05`) e
+convergência saudável.
 
 ---
 
 ## 4. Um resultado contraintuitivo (e honesto)
 
-Com o baseline final, comparando escala original vs. padronizada:
+Com o baseline final (`lr=0.01`), comparando escala original vs. padronizada:
 
 | Baseline           | MAE    | MSE    | RMSE   | R²     |
 |--------------------|--------|--------|--------|--------|
-| Sem padronização   | 0.4921 | 0.3717 | 0.6097 | **0.2811** |
-| Com padronização   | 0.5161 | 0.4170 | 0.6458 | 0.1936 |
+| Sem padronização   | 0.5784 | 0.5124 | 0.7158 | 0.0091 |
+| Com padronização   | 0.5570 | 0.4841 | 0.6958 | **0.0637** |
 
-**A padronização NÃO deu o melhor R² aqui.** Isso não é um erro — é uma lição:
-- A padronização **estabiliza e destrava** o treino (é indispensável quando a Tanh satura e o
-  passo é pequeno), mas **não é bala de prata**. Com `lr=0.05` e 3000 épocas, a escala original
-  já conseguiu convergir e, neste conjunto pequeno, generalizou até um pouco melhor.
-- Isso confirma na prática a fala do professor: **dava para fazer sem normalizar**. A
-  normalização é uma ferramenta para um problema específico (saturação/condicionamento), não um
-  passo obrigatório que sempre melhora a métrica.
+Com o passo estável, a **padronização passa a ajudar** (R² 0.009 → 0.064): sem ela, a saturação
+da Tanh combinada ao passo pequeno trava o aprendizado. Vale registrar uma lição observada
+durante o estudo: com `lr=0.05` (instável), a escala original chegava a dar R² maior — mas de
+forma **não confiável**, dependente do ponto onde o treino oscilante parava. Ou seja:
+
+- A padronização **estabiliza e destrava** o treino, especialmente quando a Tanh satura e o
+  passo é pequeno; **não é, porém, um passo mágico** que sempre maximiza a métrica.
+- Isso é coerente com a fala do professor: **dava para fazer sem normalizar**. A normalização é
+  ferramenta para um problema específico (saturação/condicionamento numérico), não obrigação.
 
 > O restante do estudo de ablação foi conduzido **sobre os dados padronizados**, para manter um
-> pipeline único e porque a padronização torna o treino mais estável e comparável entre os
-> modelos.
+> pipeline único, estável e comparável entre os modelos.
 
 ---
 
@@ -116,24 +146,28 @@ Mesma arquitetura e mesmo protocolo; muda-se **um** componente por vez.
 
 | Modelo               | MAE    | MSE    | RMSE   | R²     | Melhor época (val) |
 |----------------------|--------|--------|--------|--------|--------------------|
-| Baseline (SGD puro)  | 0.5161 | 0.4170 | 0.6458 | 0.1936 | 750                |
-| + Momentum (0.9)     | 0.5224 | 0.4718 | 0.6869 | 0.0876 | 2001               |
-| + L2 (1e-3)          | 0.5237 | 0.4252 | 0.6520 | 0.1778 | 750                |
-| + L1 (1e-4)          | 0.5200 | 0.4219 | 0.6496 | 0.1840 | 750                |
-| + Dropout (0.05)     | 0.5735 | 0.4916 | 0.7012 | 0.0492 | 1924               |
+| Baseline (SGD puro)  | 0.5570 | 0.4841 | 0.6958 | 0.0637 | 1179               |
+| + Momentum (0.9)     | 0.4861 | 0.4338 | 0.6586 | **0.1611** | 2964           |
+| + L2 (1e-3)          | 0.5585 | 0.4821 | 0.6943 | 0.0677 | 1179               |
+| + L1 (1e-4)          | 0.5569 | 0.4821 | 0.6943 | 0.0677 | 1179               |
+| + Dropout (0.05)     | 0.5780 | 0.5010 | 0.7078 | 0.0311 | 2153               |
 
 ### Interpretação
 
-- **Melhor época de validação do baseline = 750 de 3000.** Depois disso a validação para de
-  melhorar e a rede começa a **sobreajustar** (visível no gráfico treino×validação: o treino
-  continua caindo, a validação sobe). O gargalo, que começou como subajuste, virou sobreajuste.
-- **Momentum piorou (R² 0.19 → 0.09).** Ele acelera a convergência, mas neste regime de poucos
-  dados isso levou a rede **mais rápido para o sobreajuste** — a melhor época pulou para ~2000 e
-  a curva ficou instável.
-- **Dropout piorou (R² 0.05).** Com apenas 30 pontos, desligar unidades reduz ainda mais a já
+- **Momentum foi o melhor modelo (R² 0.06 → 0.16).** Este é um resultado dependente do learning
+  rate e vale destacar: com `lr=0.05` (instável, versão anterior deste estudo) o momentum
+  *piorava*, porque acelerava o *overshoot* e a curva quicava. Com o `lr=0.01` estável, o
+  momentum faz o que se espera dele — **acelera a convergência de forma útil**, ajudando o SGD
+  puro (que sozinho é lento com passo pequeno) a descer de forma suave e consistente. **Lição: o
+  efeito do momentum depende do learning rate.**
+- **Melhor época de validação do baseline = 1179 de 3000.** Depois disso a validação para de
+  melhorar e volta a subir (visível no gráfico treino×validação: o treino continua caindo, a
+  validação faz um "U"). O gargalo, que começou como subajuste, torna-se sobreajuste.
+- **Dropout piorou (R² 0.03).** Com apenas 30 pontos, desligar unidades reduz ainda mais a já
   escassa capacidade efetiva e atrapalha o ajuste.
-- **L1 e L2 quase empataram com o baseline** (0.184 e 0.178). A penalidade teve efeito marginal
-  porque os pesos não atingiram magnitudes grandes — não havia muito o que "encolher".
+- **L1 e L2 praticamente empataram com o baseline** (ambos 0.068 vs. 0.064). A penalidade teve
+  efeito marginal porque os pesos não atingiram magnitudes grandes — não havia muito o que
+  "encolher".
 
 **Detalhe técnico corrigido em relação à versão original:** a penalidade **L1 é aplicada apenas
 aos pesos** (`weight`), nunca aos *bias*. Penalizar bias não tem justificativa estatística e
@@ -153,15 +187,21 @@ distorce o efeito da regularização.
 ## 7. Lições aprendidas
 
 1. **Diagnosticar antes de "consertar".** O R² negativo não vinha da arquitetura; vinha de
-   **convergência insuficiente**. Ajustar passo e épocas resolveu a maior parte.
-2. **Saturação de ativação importa.** A Tanh em [0, 10] com pesos pequenos sofre com gradiente
-   ~0. Padronizar a entrada é a forma correta (e sem vazamento) de mitigar isso.
-3. **Normalização não é obrigatória nem mágica.** Ajuda a *estabilizar/destravar*, mas pode não
-   melhorar a métrica final — depende do resto do setup.
-4. **Regularização resolve sobreajuste, não subajuste.** Por isso L1/L2/dropout/momentum não
-   ajudaram enquanto o problema era subajuste, e passam a fazer sentido só depois que o treino
-   converge e começa a sobreajustar.
-5. **Com 30 pontos há um teto de generalização.** Nenhum ajuste fino supera a limitação de
+   **convergência insuficiente** (poucas épocas). Ajustar passo e épocas resolveu a maior parte.
+2. **Learning rate controla a estabilidade.** Passo grande (`lr=0.05`) com batch pequeno faz a
+   perda oscilar/quicar (*overshoot*); um bom resultado assim é pouco confiável. Baixar para
+   `lr=0.01` reduziu o *jitter* em ~45% e deu um treino estável — porém `lr` pequeno demais torna
+   o SGD puro lento. Existe um ponto de equilíbrio.
+3. **Saturação de ativação importa.** A Tanh em [0, 10] com pesos pequenos sofre com gradiente
+   ~0. Padronizar a entrada (sem vazamento) é a forma correta de mitigar isso.
+4. **Normalização não é obrigatória nem mágica.** Ajuda a *estabilizar/destravar*, mas seu ganho
+   depende do resto do setup (passo, épocas).
+5. **O efeito do momentum depende do learning rate.** Com passo instável ele piorava (acelerava
+   o overshoot); com passo estável ele virou o melhor modelo (acelerou a convergência útil).
+6. **Regularização resolve sobreajuste, não subajuste.** Por isso L1/L2/dropout não ajudaram
+   enquanto o problema era subajuste, e só passam a fazer sentido depois que o treino converge e
+   começa a sobreajustar.
+7. **Com 30 pontos há um teto de generalização.** Nenhum ajuste fino supera a limitação de
    amostragem para uma função de alta frequência — a lição vale mais que o número de R².
 
 ---
