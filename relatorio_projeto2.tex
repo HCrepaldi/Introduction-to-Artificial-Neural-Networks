@@ -1,0 +1,186 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{tabularx}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=blue!70!black,
+    urlcolor=blue!70!black
+}
+
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.5em}{}
+\titlespacing*{\section}{0pt}{1.2ex plus 0.5ex minus .2ex}{0.6ex}
+\titlespacing*{\subsection}{0pt}{1.0ex plus 0.4ex minus .2ex}{0.4ex}
+
+\setlength{\parskip}{0.45em}
+\setlength{\parindent}{0pt}
+
+\begin{document}
+
+\begin{center}
+    {\LARGE \textbf{Projeto 2: Quantização de Cores com Aprendizado Não Supervisionado (SOM e GNG)}} \\[0.35em]
+    {\large Disciplina: Introdução às Redes Neurais Artificiais} \\[0.3em]
+    \textbf{Autor:} Henrique Crepaldi (RA: 120410) \\[0.2em]
+    \textbf{Código Reprodutível (NumPy + Pillow + MiniSom):} \url{https://github.com/HCrepaldi/Introduction-to-Artificial-Neural-Networks}
+\end{center}
+\vspace{-0.5em}
+\hrule
+\vspace{0.8em}
+
+\section{Objetivo e Formulação do Problema}
+
+O objetivo deste projeto é compreender o \textbf{aprendizado competitivo} e a \textbf{preservação topológica} ao reduzir drasticamente a paleta de cores de uma imagem (compressão por quantização vetorial), empregando duas redes não supervisionadas: o \textit{Self-Organizing Map} (SOM) e o \textit{Growing Neural Gas} (GNG).
+
+Cada pixel da imagem é tratado como uma amostra tridimensional cujas características são os canais \textbf{Red}, \textbf{Green} e \textbf{Blue} (RGB). A rede aprende um pequeno conjunto de cores-protótipo (16, 64 ou 256) que resumem a distribuição de cores da imagem; em seguida, cada pixel é substituído pela cor do seu neurônio vencedor (\textit{Best Matching Unit}, BMU).
+
+\subsection{Caminho Adotado e Ausência de Vazamento de Dados}
+Adotou-se o caminho de \textbf{quantização clássica}: a rede é treinada nos pixels de uma imagem e utilizada para quantizar \textbf{essa mesma} imagem. Trata-se de uma tarefa de \textit{compressão}, e não de generalização para imagens inéditas; portanto, \textbf{não existe conjunto de teste independente nem risco de vazamento de dados} nesta formulação --- treinar e inferir sobre a mesma imagem é a própria natureza da quantização. A variante de generalização entre imagens distintas (na qual o conceito de vazamento voltaria a ser pertinente) é deixada como trabalho futuro.
+
+\section{Configuração Experimental e Reprodutibilidade}
+
+\subsection{Extração e Normalização}
+O sistema carrega a imagem em cores, descarta eventual canal de transparência (conversão para RGB), extrai todos os pixels e \textbf{normaliza} os valores RGB para o intervalo $[0, 1]$. Como as redes competitivas operam sobre \textbf{distâncias euclidianas} entre pesos e amostras, manter os três canais na mesma escala torna homogênea a contribuição de cada canal e confere significado estável às taxas de aprendizado. Toda a aleatoriedade (amostragem, inicialização e ordem de apresentação) é controlada por semente global \textit{(Seed = 42)}, assegurando reprodutibilidade.
+
+\subsection{Amostragem para Treino}
+A imagem possui $1350 \times 1080 = 1{.}458{.}000$ pixels. Treinar sobre a totalidade é desnecessário: uma amostra aleatória de \textbf{20.000 pixels} representa bem a distribuição de cores. É fundamental destacar que a amostragem afeta \textbf{apenas o treino}; a \textbf{inferência} (substituição da cor de cada pixel pelo seu BMU) é realizada sobre a \textbf{totalidade} dos pixels da imagem.
+
+\subsection{Hiperparâmetros das Redes}
+A Tabela~\ref{tab:hiper} sintetiza a configuração das duas arquiteturas. O SOM utiliza a biblioteca \texttt{MiniSom}; o GNG foi \textbf{implementado do zero} (seguindo Fritzke, 1995), por não haver biblioteca madura e mantida para o Python moderno e, sobretudo, porque a leitura direta do algoritmo é a forma mais segura de dominá-lo para fins de apresentação.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Configuração das redes SOM (MiniSom) e GNG (implementação própria).}
+\label{tab:hiper}
+\begin{tabularx}{\textwidth}{lXl}
+\toprule
+\textbf{Rede / Parâmetro} & \textbf{Descrição} & \textbf{Valores} \\
+\midrule
+SOM --- Topologia       & Grid 2D quadrado fixo (vizinhança gaussiana) & $4\times4$, $8\times8$, $16\times16$ \\
+SOM --- $\sigma$ inicial & Raio inicial da vizinhança no grid & metade do lado do grid \\
+SOM --- Taxa ($\eta$)    & Taxa de aprendizado inicial (decai no tempo) & 0.5 \\
+SOM --- Iterações        & Amostras apresentadas no treino & 5000 \\
+\midrule
+GNG --- $N_{\max}$       & Número-alvo de neurônios (tamanho da paleta) & 16, 64, 256 \\
+GNG --- $\epsilon_b$     & Passo de correção do vencedor (BMU) & 0.05 \\
+GNG --- $\epsilon_n$     & Passo de correção dos vizinhos de grafo & 0.006 \\
+GNG --- idade\_max       & Idade máxima de uma aresta antes da remoção & 50 \\
+GNG --- $\lambda$        & Intervalo (em amostras) entre inserções de neurônio & 200 \\
+GNG --- $\alpha$         & Fator de redução de erro na inserção & 0.5 \\
+GNG --- $\beta$          & Decaimento global do erro por iteração & 0.0005 \\
+GNG --- Épocas           & Passagens completas pela amostra de treino & 20 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Metodologia: As Duas Redes e as Métricas}
+
+\subsection{SOM --- Topologia Fixa}
+No SOM, os neurônios vivem em um \textbf{grid 2D definido a priori} (por exemplo, $8\times8 = 64$ neurônios). A cada amostra apresentada, o vencedor e seus \textbf{vizinhos no grid} são atualizados por uma função de vizinhança gaussiana cujo raio ($\sigma$) decai ao longo do treino: inicialmente a atualização é cooperativa e global; ao final, torna-se um refinamento local de cada região de cor.
+
+\subsection{GNG --- Topologia Adaptativa}
+No GNG, a topologia \textbf{cresce e se adapta aos dados}. A rede inicia com dois neurônios e insere novos neurônios nas regiões de \textbf{maior erro acumulado}, até atingir o número-alvo. As conexões (arestas) são criadas entre o primeiro e o segundo BMU de cada amostra, envelhecem a cada iteração e são removidas quando ultrapassam a idade máxima. O ciclo principal, para cada pixel $x$, segue os passos de Fritzke (1995): (i) localizar o vencedor $s_1$ e o segundo colocado $s_2$; (ii) envelhecer as arestas de $s_1$; (iii) acumular em $s_1$ o erro $\lVert x - w_{s_1}\rVert^2$; (iv) mover $s_1$ (passo $\epsilon_b$) e seus vizinhos (passo $\epsilon_n$) em direção a $x$; (v) conectar $s_1$ e $s_2$; (vi) remover arestas velhas e neurônios isolados; (vii) a cada $\lambda$ amostras, inserir um neurônio na região de maior erro; (viii) decair globalmente o erro.
+
+\subsection{Métricas de Avaliação}
+Duas métricas complementares foram utilizadas:
+\begin{itemize}
+    \item \textbf{Erro de Quantização (EQ)} --- mede a \textit{fidelidade}. É a distância euclidiana média entre cada pixel e a cor do seu BMU, na escala $[0,1]$. Quanto menor, mais fiel é a reconstrução.
+    \item \textbf{Erro Topológico (ET)} --- mede a \textit{preservação da topologia}. É a fração de amostras cujo primeiro e segundo BMU \textbf{não} são vizinhos. No SOM, ``vizinhos'' significa adjacentes no grid (distância de Chebyshev $\le 1$); no GNG, significa ligados por uma \textbf{aresta} do grafo aprendido. O critério é conceitualmente idêntico nas duas redes, tornando a comparação justa.
+\end{itemize}
+
+\section{Resultados}
+
+Os experimentos foram validados em dois cartazes (\textit{flyers}) de divulgação, ambos com $1350 \times 1080$ pixels. As Tabelas~\ref{tab:img1} e~\ref{tab:img2} apresentam o erro de quantização (EQ), o erro topológico (ET) e o tempo de execução para as seis configurações (SOM $4\times4$, $8\times8$, $16\times16$ e GNG 16, 64, 256). A Figura~\ref{fig:comparativo} sintetiza graficamente a comparação, e a Figura~\ref{fig:reconstrucao} ilustra uma reconstrução com apenas 16 cores.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Imagem 1 (131.548 cores únicas): EQ, ET e tempo por configuração.}
+\label{tab:img1}
+\begin{tabularx}{\textwidth}{llccc}
+\toprule
+\textbf{Rede} & \textbf{Configuração} & \textbf{EQ} ($\downarrow$) & \textbf{ET} ($\downarrow$) & \textbf{Tempo (s)} \\
+\midrule
+SOM & $4\times4$ \ (K=16)    & 0.0641 & 0.0114 & 1.3 \\
+SOM & $8\times8$ \ (K=64)    & 0.0496 & 0.0428 & 3.1 \\
+SOM & $16\times16$ (K=256)   & 0.0297 & 0.0547 & 10.5 \\
+GNG & 16 neurônios           & 0.0540 & \textbf{0.0000} & 9.3 \\
+GNG & 64 neurônios           & \textbf{0.0249} & 0.0039 & 20.9 \\
+GNG & 256 neurônios          & \textbf{0.0143} & 0.0056 & 65.4 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[h]
+\centering
+\small
+\caption{Imagem 2 (198.031 cores únicas): EQ, ET e tempo por configuração.}
+\label{tab:img2}
+\begin{tabularx}{\textwidth}{llccc}
+\toprule
+\textbf{Rede} & \textbf{Configuração} & \textbf{EQ} ($\downarrow$) & \textbf{ET} ($\downarrow$) & \textbf{Tempo (s)} \\
+\midrule
+SOM & $4\times4$ \ (K=16)    & 0.0946 & 0.0026 & 1.2 \\
+SOM & $8\times8$ \ (K=64)    & 0.0716 & 0.0049 & 3.0 \\
+SOM & $16\times16$ (K=256)   & 0.0515 & 0.0090 & 9.9 \\
+GNG & 16 neurônios           & 0.0732 & 0.0055 & 8.9 \\
+GNG & 64 neurônios           & \textbf{0.0351} & \textbf{0.0020} & 20.6 \\
+GNG & 256 neurônios          & \textbf{0.0199} & 0.0041 & 63.4 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{comparativo_metricas.png}
+\caption{Comparação SOM vs. GNG por número de cores (K) na Imagem 1. À esquerda, erro de quantização; à direita, erro topológico. Em ambos os painéis, menor é melhor.}
+\label{fig:comparativo}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{gng_16.png}
+\caption{Reconstrução com GNG e apenas 16 cores (K=16): imagem original (esquerda), quantizada (direita) e paleta de cores extraída (centroides/pesos dos neurônios). Mesmo com paleta mínima, a estrutura visual é preservada.}
+\label{fig:reconstrucao}
+\end{figure}
+
+\section{Discussão e Lições Aprendidas}
+
+\begin{itemize}
+    \item \textbf{Mais neurônios reduzem o erro de quantização.} Em ambas as redes e nas duas imagens, o EQ cai monotonicamente com o aumento de K. Mais cores-protótipo permitem reconstrução mais fiel --- comportamento esperado e observado sem exceções.
+
+    \item \textbf{O GNG supera o SOM em fidelidade para o mesmo K.} Na Imagem 1, com K=256, o GNG obteve EQ de $0{,}0143$ contra $0{,}0297$ do SOM (praticamente metade do erro). A razão é estrutural: o SOM precisa manter um \textbf{grid retangular fixo}, alocando neurônios mesmo em regiões pouco povoadas do espaço de cores; o GNG, livre dessa amarra, concentra os protótipos onde o erro é maior. Essa é a principal vantagem do crescimento adaptativo para a quantização pura.
+
+    \item \textbf{O GNG preserva melhor a topologia, e o ET do SOM piora com o grid.} As arestas aprendidas pelo GNG acompanham a nuvem de cores, mantendo o ET baixo em todas as escalas. Já o grid fixo do SOM precisa ``dobrar-se'' para cobrir os dados, e quanto maior o grid, maior a chance de dobras: na Imagem 1, o ET do SOM cresceu de $0{,}0114$ ($4\times4$) para $0{,}0547$ ($16\times16$). Trata-se de uma manifestação direta do conflito entre uma topologia imposta e a geometria real dos dados.
+
+    \item \textbf{Há um \textit{trade-off} entre qualidade e custo computacional.} O GNG é mais custoso (até $\approx 65$~s para K=256), por ser um laço explícito com inserções incrementais, enquanto o SOM vetorizado da \texttt{MiniSom} é consideravelmente mais rápido. Em contrapartida, o GNG entrega melhores EQ e ET. A escolha entre as redes depende, portanto, da prioridade: fidelidade/topologia (GNG) ou velocidade e um mapa 2D ordenado para visualização (SOM).
+
+    \item \textbf{A dificuldade da imagem é um fator relevante.} A Imagem 2, com mais cores únicas (198 mil contra 131 mil), apresentou EQ sistematicamente maior para o mesmo K (por exemplo, SOM $4\times4$: $0{,}0946$ contra $0{,}0641$). Isso evidencia que a métrica absoluta deve sempre ser interpretada à luz da complexidade da entrada.
+
+    \item \textbf{Implementar o GNG do zero foi decisivo.} Além de contornar a ausência de bibliotecas mantidas, a implementação própria torna cada mecanismo --- crescimento por erro, envelhecimento de arestas, remoção de neurônios isolados --- explícito e defensável, atendendo plenamente ao objetivo didático do projeto.
+\end{itemize}
+
+\section{Reprodutibilidade}
+
+O experimento é integralmente reproduzível por meio do script \texttt{quantizacao\_cores\_project2.py}:
+
+\begin{verbatim}
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements_projeto2.txt
+python quantizacao_cores_project2.py --imagem caminho/da/imagem.jpg --saida resultados
+\end{verbatim}
+
+O script imprime a tabela de EQ/ET/tempo para as seis configurações e salva, para cada uma, uma figura com a imagem original, a quantizada e a paleta extraída, além do gráfico comparativo das métricas. Os parâmetros \texttt{-{}-amostras} (número de pixels de treino) e \texttt{-{}-saida} (pasta de saída) permitem ajustar a execução.
+
+\end{document}

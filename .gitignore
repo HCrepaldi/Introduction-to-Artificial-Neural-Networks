@@ -3,3 +3,15 @@
 .python-version
 __pycache__/
 *.pyc
+
+# Projeto 2 - artefatos de validacao (imagens que NAO entram no projeto)
+imagens_teste/
+resultados/
+resultados_img02/
+
+# Artefatos de compilacao LaTeX
+*.aux
+*.log
+*.out
+*.toc
+.texbuild/
