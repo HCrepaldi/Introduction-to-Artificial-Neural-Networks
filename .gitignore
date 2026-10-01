@@ -8,3 +8,10 @@ __pycache__/
 imagens_teste/
 resultados/
 resultados_img02/
+
+# Artefatos de compilacao LaTeX
+*.aux
+*.log
+*.out
+*.toc
+.texbuild/

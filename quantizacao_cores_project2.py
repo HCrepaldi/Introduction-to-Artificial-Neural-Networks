@@ -574,6 +574,56 @@ def salvar_comparacao(caminho_saida, original_uint8, quantizada_uint8,
     plt.close(fig)
 
 
+def salvar_grafico_comparativo(caminho_saida, resultados):
+    """Gera um grafico de barras comparando SOM x GNG em EQ e ET, por K.
+
+    'resultados' e a lista de tuplas (rede, cfg, K, EQ, ET, tempo) acumulada na
+    main. Produz dois paineis lado a lado (EQ e ET) para facilitar a leitura do
+    trade-off fidelidade x topologia entre as duas redes nas tres escalas.
+    """
+    ks = [16, 64, 256]
+    eq_som = {k: None for k in ks}
+    eq_gng = {k: None for k in ks}
+    et_som = {k: None for k in ks}
+    et_gng = {k: None for k in ks}
+    for rede, _cfg, k, eq, et, _dt in resultados:
+        alvo_eq = eq_som if rede == "SOM" else eq_gng
+        alvo_et = et_som if rede == "SOM" else et_gng
+        # casa o K obtido com o K-alvo mais proximo (GNG pode variar levemente).
+        k_alvo = min(ks, key=lambda kk: abs(kk - k))
+        alvo_eq[k_alvo] = eq
+        alvo_et[k_alvo] = et
+
+    x = np.arange(len(ks))
+    largura = 0.35
+    fig, (axq, axt) = plt.subplots(1, 2, figsize=(12, 4.5))
+
+    axq.bar(x - largura / 2, [eq_som[k] for k in ks], largura, label="SOM")
+    axq.bar(x + largura / 2, [eq_gng[k] for k in ks], largura, label="GNG")
+    axq.set_title("Erro de Quantizacao (menor = melhor)")
+    axq.set_xlabel("Numero de cores (K)")
+    axq.set_ylabel("EQ (distancia media)")
+    axq.set_xticks(x)
+    axq.set_xticklabels(ks)
+    axq.legend()
+    axq.grid(True, axis="y", ls="--", alpha=0.5)
+
+    axt.bar(x - largura / 2, [et_som[k] for k in ks], largura, label="SOM")
+    axt.bar(x + largura / 2, [et_gng[k] for k in ks], largura, label="GNG")
+    axt.set_title("Erro Topologico (menor = melhor)")
+    axt.set_xlabel("Numero de cores (K)")
+    axt.set_ylabel("ET (fracao de violacoes)")
+    axt.set_xticks(x)
+    axt.set_xticklabels(ks)
+    axt.legend()
+    axt.grid(True, axis="y", ls="--", alpha=0.5)
+
+    fig.suptitle("SOM vs GNG - comparacao de metricas por numero de cores")
+    fig.tight_layout()
+    fig.savefig(caminho_saida, dpi=130)
+    plt.close(fig)
+
+
 # ==============================================================================
 # 8. EXECUCAO PRINCIPAL
 # ==============================================================================
@@ -654,7 +704,12 @@ def main():
     for rede, cfg, k, eq, et, dt in resultados:
         print(f"{rede:<5} {cfg:<8} {k:<5} {eq:<10.4f} {et:<10.4f} {dt:<9.1f}")
     print("=" * 74)
-    print(f"\n[OK] Figuras salvas em: {args.saida}/")
+
+    # grafico de barras comparativo (SOM x GNG, EQ e ET por K).
+    nome_cmp = os.path.join(args.saida, "comparativo_metricas.png")
+    salvar_grafico_comparativo(nome_cmp, resultados)
+    print(f"[OK] Grafico comparativo salvo: {nome_cmp}")
+    print(f"[OK] Figuras salvas em: {args.saida}/")
 
 
 if __name__ == "__main__":
