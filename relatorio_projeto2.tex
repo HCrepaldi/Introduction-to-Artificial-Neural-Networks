@@ -11,6 +11,10 @@
 \usepackage{titlesec}
 \usepackage{tabularx}
 
+% As figuras geradas pelo script ficam nas pastas de saida (uma por imagem de
+% teste). Ajuste os caminhos abaixo conforme a organizacao local das figuras.
+\graphicspath{{figuras/}{resultados/}{./}}
+
 \hypersetup{
     colorlinks=true,
     linkcolor=blue!70!black,
@@ -44,6 +48,8 @@ O objetivo deste projeto é compreender o \textbf{aprendizado competitivo} e a \
 
 Cada pixel da imagem é tratado como uma amostra tridimensional cujas características são os canais \textbf{Red}, \textbf{Green} e \textbf{Blue} (RGB). A rede aprende um pequeno conjunto de cores-protótipo (16, 64 ou 256) que resumem a distribuição de cores da imagem; em seguida, cada pixel é substituído pela cor do seu neurônio vencedor (\textit{Best Matching Unit}, BMU).
 
+Mais do que simplesmente comparar as duas redes, este trabalho investiga uma \textbf{tese central}: a \textit{estrutura} da distribuição de cores no espaço RGB determina o desempenho relativo de SOM e GNG, sobretudo quanto à preservação topológica. Para evidenciá-la, as redes são avaliadas em três imagens com distribuições de cor deliberadamente distintas (Seção~5).
+
 \subsection{Caminho Adotado e Ausência de Vazamento de Dados}
 Adotou-se o caminho de \textbf{quantização clássica}: a rede é treinada nos pixels de uma imagem e utilizada para quantizar \textbf{essa mesma} imagem. Trata-se de uma tarefa de \textit{compressão}, e não de generalização para imagens inéditas; portanto, \textbf{não existe conjunto de teste independente nem risco de vazamento de dados} nesta formulação --- treinar e inferir sobre a mesma imagem é a própria natureza da quantização. A variante de generalização entre imagens distintas (na qual o conceito de vazamento voltaria a ser pertinente) é deixada como trabalho futuro.
 
@@ -53,7 +59,7 @@ Adotou-se o caminho de \textbf{quantização clássica}: a rede é treinada nos 
 O sistema carrega a imagem em cores, descarta eventual canal de transparência (conversão para RGB), extrai todos os pixels e \textbf{normaliza} os valores RGB para o intervalo $[0, 1]$. Como as redes competitivas operam sobre \textbf{distâncias euclidianas} entre pesos e amostras, manter os três canais na mesma escala torna homogênea a contribuição de cada canal e confere significado estável às taxas de aprendizado. Toda a aleatoriedade (amostragem, inicialização e ordem de apresentação) é controlada por semente global \textit{(Seed = 42)}, assegurando reprodutibilidade.
 
 \subsection{Amostragem para Treino}
-A imagem possui $1350 \times 1080 = 1{.}458{.}000$ pixels. Treinar sobre a totalidade é desnecessário: uma amostra aleatória de \textbf{20.000 pixels} representa bem a distribuição de cores. É fundamental destacar que a amostragem afeta \textbf{apenas o treino}; a \textbf{inferência} (substituição da cor de cada pixel pelo seu BMU) é realizada sobre a \textbf{totalidade} dos pixels da imagem.
+As imagens avaliadas chegam a $4500 \times 4500 = 20{.}250{.}000$ pixels. Treinar sobre a totalidade é desnecessário: uma amostra aleatória de \textbf{20.000 pixels} representa bem a distribuição de cores. É fundamental destacar que a amostragem afeta \textbf{apenas o treino}; a \textbf{inferência} (substituição da cor de cada pixel pelo seu BMU) é realizada sobre a \textbf{totalidade} dos pixels da imagem.
 
 \subsection{Hiperparâmetros das Redes}
 A Tabela~\ref{tab:hiper} sintetiza a configuração das duas arquiteturas. O SOM utiliza a biblioteca \texttt{MiniSom}; o GNG foi \textbf{implementado do zero} (seguindo Fritzke, 1995), por não haver biblioteca madura e mantida para o Python moderno e, sobretudo, porque a leitura direta do algoritmo é a forma mais segura de dominá-lo para fins de apresentação.
@@ -99,25 +105,45 @@ Duas métricas complementares foram utilizadas:
     \item \textbf{Erro Topológico (ET)} --- mede a \textit{preservação da topologia}. É a fração de amostras cujo primeiro e segundo BMU \textbf{não} são vizinhos. No SOM, ``vizinhos'' significa adjacentes no grid (distância de Chebyshev $\le 1$); no GNG, significa ligados por uma \textbf{aresta} do grafo aprendido. O critério é conceitualmente idêntico nas duas redes, tornando a comparação justa.
 \end{itemize}
 
-\section{Resultados}
+\section{Protocolo do Estudo: Três Distribuições de Cor}
 
-Os experimentos foram validados em dois cartazes (\textit{flyers}) de divulgação, ambos com $1350 \times 1080$ pixels. As Tabelas~\ref{tab:img1} e~\ref{tab:img2} apresentam o erro de quantização (EQ), o erro topológico (ET) e o tempo de execução para as seis configurações (SOM $4\times4$, $8\times8$, $16\times16$ e GNG 16, 64, 256). A Figura~\ref{fig:comparativo} sintetiza graficamente a comparação, e a Figura~\ref{fig:reconstrucao} ilustra uma reconstrução com apenas 16 cores.
+Para testar a tese central, foram selecionadas três imagens com distribuições de cor estruturalmente diferentes, descritas na Tabela~\ref{tab:casos}. As duas primeiras são sintéticas (geradas em software vetorial), concebidas para isolar fenômenos específicos; a terceira é um cartaz real de divulgação, que verifica se os fenômenos observados nas sintéticas se manifestam em dados naturais.
 
 \begin{table}[h]
 \centering
 \small
-\caption{Imagem 1 (131.548 cores únicas): EQ, ET e tempo por configuração.}
-\label{tab:img1}
+\caption{As três imagens de teste e suas características de distribuição de cor.}
+\label{tab:casos}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+\textbf{Caso} & \textbf{Dimensões} & \textbf{Cores únicas} & \textbf{Característica da distribuição de cores} \\
+\midrule
+Contínuo & $4500\times4500$ & 235.594 & Gradiente suave que percorre todo o espectro (azul, verde, amarelo, ciano, magenta); distribuição aproximadamente contínua e bidimensional. \\
+Desigual & $4500\times4500$ & 114.912 & Gradiente amarelo/cinza dominante ($\sim$80\% da área) com um canto minoritário de cores muito saturadas; distribuição concentrada e multimodal. \\
+Real (flyer) & $1080\times1350$ & 327.840 & Cartaz fotográfico com texto (banda Sinner); mistura de tons de pele, verdes, pretos e um rosa saturado; distribuição natural e intermediária. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Resultados}
+
+As Tabelas~\ref{tab:continuo},~\ref{tab:desigual} e~\ref{tab:real} apresentam EQ, ET e tempo de execução para as seis configurações em cada caso. A Figura~\ref{fig:comparativos} reúne os gráficos comparativos SOM $\times$ GNG, e a Figura~\ref{fig:reconstrucoes} ilustra reconstruções representativas.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Caso \textbf{Contínuo} (gradiente full-spectrum, $4500\times4500$).}
+\label{tab:continuo}
 \begin{tabularx}{\textwidth}{llccc}
 \toprule
 \textbf{Rede} & \textbf{Configuração} & \textbf{EQ} ($\downarrow$) & \textbf{ET} ($\downarrow$) & \textbf{Tempo (s)} \\
 \midrule
-SOM & $4\times4$ \ (K=16)    & 0.0641 & 0.0114 & 1.3 \\
-SOM & $8\times8$ \ (K=64)    & 0.0496 & 0.0428 & 3.1 \\
-SOM & $16\times16$ (K=256)   & 0.0297 & 0.0547 & 10.5 \\
-GNG & 16 neurônios           & 0.0540 & \textbf{0.0000} & 9.3 \\
-GNG & 64 neurônios           & \textbf{0.0249} & 0.0039 & 20.9 \\
-GNG & 256 neurônios          & \textbf{0.0143} & 0.0056 & 65.4 \\
+SOM & $4\times4$ \ (K=16)    & 0.1364 & 0.0024 & 17.0 \\
+SOM & $8\times8$ \ (K=64)    & 0.1024 & 0.0053 & 43.3 \\
+SOM & $16\times16$ (K=256)   & 0.0814 & 0.0048 & 138.5 \\
+GNG & 16 neurônios           & 0.1166 & \textbf{0.0004} & 26.6 \\
+GNG & 64 neurônios           & \textbf{0.0541} & 0.0008 & 59.1 \\
+GNG & 256 neurônios          & \textbf{0.0274} & 0.0016 & 219.5 \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -125,48 +151,77 @@ GNG & 256 neurônios          & \textbf{0.0143} & 0.0056 & 65.4 \\
 \begin{table}[h]
 \centering
 \small
-\caption{Imagem 2 (198.031 cores únicas): EQ, ET e tempo por configuração.}
-\label{tab:img2}
+\caption{Caso \textbf{Desigual} (gradiente dominante + canto saturado, $4500\times4500$).}
+\label{tab:desigual}
 \begin{tabularx}{\textwidth}{llccc}
 \toprule
 \textbf{Rede} & \textbf{Configuração} & \textbf{EQ} ($\downarrow$) & \textbf{ET} ($\downarrow$) & \textbf{Tempo (s)} \\
 \midrule
-SOM & $4\times4$ \ (K=16)    & 0.0946 & 0.0026 & 1.2 \\
-SOM & $8\times8$ \ (K=64)    & 0.0716 & 0.0049 & 3.0 \\
-SOM & $16\times16$ (K=256)   & 0.0515 & 0.0090 & 9.9 \\
-GNG & 16 neurônios           & 0.0732 & 0.0055 & 8.9 \\
-GNG & 64 neurônios           & \textbf{0.0351} & \textbf{0.0020} & 20.6 \\
-GNG & 256 neurônios          & \textbf{0.0199} & 0.0041 & 63.4 \\
+SOM & $4\times4$ \ (K=16)    & 0.0528 & 0.0000 & 14.9 \\
+SOM & $8\times8$ \ (K=64)    & 0.0373 & 0.0783 & 38.6 \\
+SOM & $16\times16$ (K=256)   & 0.0327 & \textbf{0.2555} & 155.0 \\
+GNG & 16 neurônios           & 0.0384 & 0.0037 & 25.5 \\
+GNG & 64 neurônios           & \textbf{0.0154} & \textbf{0.0008} & 62.3 \\
+GNG & 256 neurônios          & \textbf{0.0084} & 0.0117 & 205.7 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[h]
+\centering
+\small
+\caption{Caso \textbf{Real} --- flyer da banda Sinner ($1080\times1350$).}
+\label{tab:real}
+\begin{tabularx}{\textwidth}{llccc}
+\toprule
+\textbf{Rede} & \textbf{Configuração} & \textbf{EQ} ($\downarrow$) & \textbf{ET} ($\downarrow$) & \textbf{Tempo (s)} \\
+\midrule
+SOM & $4\times4$ \ (K=16)    & 0.1157 & 0.0000 & 1.8 \\
+SOM & $8\times8$ \ (K=64)    & 0.0846 & 0.0199 & 3.6 \\
+SOM & $16\times16$ (K=256)   & 0.0699 & 0.0480 & 10.1 \\
+GNG & 16 neurônios           & 0.0916 & \textbf{0.0005} & 11.6 \\
+GNG & 64 neurônios           & \textbf{0.0451} & 0.0023 & 30.3 \\
+GNG & 256 neurônios          & \textbf{0.0262} & 0.0046 & 94.0 \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.95\textwidth]{comparativo_metricas.png}
-\caption{Comparação SOM vs. GNG por número de cores (K) na Imagem 1. À esquerda, erro de quantização; à direita, erro topológico. Em ambos os painéis, menor é melhor.}
-\label{fig:comparativo}
+\includegraphics[width=0.8\textwidth]{comparativo_continuo.png}\\[0.4em]
+\includegraphics[width=0.8\textwidth]{comparativo_desigual.png}\\[0.4em]
+\includegraphics[width=0.8\textwidth]{comparativo_real.png}
+\caption{Comparação SOM vs. GNG por número de cores (K) nos três casos (de cima para baixo: contínuo, desigual e real). Em todos os painéis, menor é melhor. Note a escala do erro topológico (direita) no caso desigual, uma ordem de grandeza acima dos demais.}
+\label{fig:comparativos}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.95\textwidth]{gng_16.png}
-\caption{Reconstrução com GNG e apenas 16 cores (K=16): imagem original (esquerda), quantizada (direita) e paleta de cores extraída (centroides/pesos dos neurônios). Mesmo com paleta mínima, a estrutura visual é preservada.}
-\label{fig:reconstrucao}
+\includegraphics[width=0.49\textwidth]{desigual_som_16x16.png}
+\includegraphics[width=0.49\textwidth]{desigual_gng_256.png}
+\caption{Reconstruções com K=256 no caso desigual: SOM $16\times16$ (esquerda) e GNG 256 (direita). O SOM, preso ao grid, suaviza em excesso o canto saturado; o GNG preserva melhor tanto o gradiente quanto as cores minoritárias.}
+\label{fig:reconstrucoes}
 \end{figure}
 
 \section{Discussão e Lições Aprendidas}
 
 \begin{itemize}
-    \item \textbf{Mais neurônios reduzem o erro de quantização.} Em ambas as redes e nas duas imagens, o EQ cai monotonicamente com o aumento de K. Mais cores-protótipo permitem reconstrução mais fiel --- comportamento esperado e observado sem exceções.
+    \item \textbf{Mais neurônios reduzem o erro de quantização, sempre.} Em todas as redes, imagens e escalas, o EQ cai monotonicamente com o aumento de K --- mais cores-protótipo permitem reconstrução mais fiel. Esse é o comportamento esperado e observado sem exceções.
 
-    \item \textbf{O GNG supera o SOM em fidelidade para o mesmo K.} Na Imagem 1, com K=256, o GNG obteve EQ de $0{,}0143$ contra $0{,}0297$ do SOM (praticamente metade do erro). A razão é estrutural: o SOM precisa manter um \textbf{grid retangular fixo}, alocando neurônios mesmo em regiões pouco povoadas do espaço de cores; o GNG, livre dessa amarra, concentra os protótipos onde o erro é maior. Essa é a principal vantagem do crescimento adaptativo para a quantização pura.
+    \item \textbf{O GNG supera o SOM em fidelidade (EQ) em todos os casos.} A vantagem é consistente e por vezes expressiva: no caso desigual com K=256, o GNG obteve EQ de $0{,}0084$ contra $0{,}0327$ do SOM (quase quatro vezes menor). A razão é estrutural: o SOM precisa manter um \textbf{grid retangular fixo}, alocando neurônios mesmo em regiões pouco povoadas do espaço de cores; o GNG, livre dessa amarra, concentra os protótipos onde o erro é maior.
 
-    \item \textbf{O GNG preserva melhor a topologia, e o ET do SOM piora com o grid.} As arestas aprendidas pelo GNG acompanham a nuvem de cores, mantendo o ET baixo em todas as escalas. Já o grid fixo do SOM precisa ``dobrar-se'' para cobrir os dados, e quanto maior o grid, maior a chance de dobras: na Imagem 1, o ET do SOM cresceu de $0{,}0114$ ($4\times4$) para $0{,}0547$ ($16\times16$). Trata-se de uma manifestação direta do conflito entre uma topologia imposta e a geometria real dos dados.
+    \item \textbf{O resultado central: o erro topológico do SOM depende da estrutura da distribuição.} Observando o ET do SOM em K=256 nos três casos, surge uma progressão limpa que confirma a tese do trabalho:
+    \begin{itemize}
+        \item \textbf{Contínuo:} ET $= 0{,}0048$ (baixo). Quando as cores formam uma variedade suave e aproximadamente bidimensional, o grid 2D do SOM ``acomoda-se'' sobre os dados sem precisar dobrar-se.
+        \item \textbf{Real:} ET $= 0{,}0480$ (intermediário). Uma distribuição natural, com modos moderadamente separados, gera dobras ocasionais.
+        \item \textbf{Desigual:} ET $= 0{,}2555$ (dispara). Com $\sim$80\% dos pixels num gradiente dominante e uma minoria de cores muito saturadas, o grid gasta a maior parte dos neurônios no modo dominante e precisa ``dobrar-se'' para alcançar o canto saturado --- mais de um quarto das amostras passa a ter o primeiro e o segundo BMU não adjacentes no grid.
+    \end{itemize}
 
-    \item \textbf{Há um \textit{trade-off} entre qualidade e custo computacional.} O GNG é mais custoso (até $\approx 65$~s para K=256), por ser um laço explícito com inserções incrementais, enquanto o SOM vetorizado da \texttt{MiniSom} é consideravelmente mais rápido. Em contrapartida, o GNG entrega melhores EQ e ET. A escolha entre as redes depende, portanto, da prioridade: fidelidade/topologia (GNG) ou velocidade e um mapa 2D ordenado para visualização (SOM).
+    \item \textbf{O GNG é robusto à estrutura da distribuição.} Em todos os três casos o ET do GNG permaneceu baixo (sempre $\le 0{,}0117$), pois as arestas aprendidas acompanham a geometria real dos dados, independentemente de ela ser contínua ou multimodal.
 
-    \item \textbf{A dificuldade da imagem é um fator relevante.} A Imagem 2, com mais cores únicas (198 mil contra 131 mil), apresentou EQ sistematicamente maior para o mesmo K (por exemplo, SOM $4\times4$: $0{,}0946$ contra $0{,}0641$). Isso evidencia que a métrica absoluta deve sempre ser interpretada à luz da complexidade da entrada.
+    \item \textbf{Conclusão madura: não há vencedor absoluto, há adequação ao dado.} O SOM \textit{não} é intrinsecamente pior em topologia --- ele vai bem quando a distribuição é contínua (caso contínuo) e sofre quando ela é desigual (caso desigual). O GNG é robusto nos dois regimes e sempre melhor em fidelidade, ao custo de maior tempo de execução. A escolha entre as redes deve, portanto, considerar a natureza dos dados e os objetivos: fidelidade/topologia robusta (GNG) ou velocidade e um mapa 2D ordenado para visualização (SOM).
+
+    \item \textbf{Custo computacional.} O GNG é mais caro (até $\approx 220$~s para K=256 em $4500^2$), por ser um laço explícito com inserções incrementais sequenciais, enquanto o SOM vetorizado da \texttt{MiniSom} é mais rápido. O treino usa sempre 20.000 amostras, mas a inferência percorre todos os pixels, o que explica os tempos maiores nas imagens $4500\times4500$ frente ao flyer $1080\times1350$.
 
     \item \textbf{Implementar o GNG do zero foi decisivo.} Além de contornar a ausência de bibliotecas mantidas, a implementação própria torna cada mecanismo --- crescimento por erro, envelhecimento de arestas, remoção de neurônios isolados --- explícito e defensável, atendendo plenamente ao objetivo didático do projeto.
 \end{itemize}
@@ -181,6 +236,6 @@ pip install -r requirements_projeto2.txt
 python quantizacao_cores_project2.py --imagem caminho/da/imagem.jpg --saida resultados
 \end{verbatim}
 
-O script imprime a tabela de EQ/ET/tempo para as seis configurações e salva, para cada uma, uma figura com a imagem original, a quantizada e a paleta extraída, além do gráfico comparativo das métricas. Os parâmetros \texttt{-{}-amostras} (número de pixels de treino) e \texttt{-{}-saida} (pasta de saída) permitem ajustar a execução.
+O script imprime a tabela de EQ/ET/tempo para as seis configurações e salva, para cada uma, uma figura com a imagem original, a quantizada e a paleta extraída, além do gráfico comparativo das métricas. Os parâmetros \texttt{-{}-amostras} (número de pixels de treino) e \texttt{-{}-saida} (pasta de saída) permitem ajustar a execução. Todos os números das Tabelas~\ref{tab:continuo}--\ref{tab:real} foram obtidos com \textit{Seed = 42}.
 
 \end{document}
