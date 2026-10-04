@@ -1,8 +1,10 @@
 \documentclass[11pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
 \usepackage{lmodern}
 \usepackage[margin=2cm]{geometry}
+\usepackage{placeins}
 \usepackage{amsmath,amssymb}
 \usepackage{booktabs}
 \usepackage{graphicx}
@@ -120,14 +122,14 @@ Para testar a tese central, foram selecionadas três imagens com distribuições
 \midrule
 Contínuo & $4500\times4500$ & 235.594 & Gradiente suave que percorre todo o espectro (azul, verde, amarelo, ciano, magenta); distribuição aproximadamente contínua e bidimensional. \\
 Desigual & $4500\times4500$ & 114.912 & Gradiente amarelo/cinza dominante ($\sim$80\% da área) com um canto minoritário de cores muito saturadas; distribuição concentrada e multimodal. \\
-Real (flyer) & $1080\times1350$ & 327.840 & Cartaz fotográfico com texto (banda Sinner); mistura de tons de pele, verdes, pretos e um rosa saturado; distribuição natural e intermediária. \\
+Real (flyer) & $1080\times1350$ & 327.840 & Cartaz fotográfico com texto (banda Cinner); mistura de tons de pele, verdes, pretos e um rosa saturado; distribuição natural e intermediária. \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 \section{Resultados}
 
-As Tabelas~\ref{tab:continuo},~\ref{tab:desigual} e~\ref{tab:real} apresentam EQ, ET e tempo de execução para as seis configurações em cada caso. A Figura~\ref{fig:comparativos} reúne os gráficos comparativos SOM $\times$ GNG, e a Figura~\ref{fig:reconstrucoes} ilustra reconstruções representativas.
+As Tabelas~\ref{tab:continuo},~\ref{tab:desigual} e~\ref{tab:real} apresentam EQ, ET e tempo de execução para as seis configurações em cada caso. As Figuras~\ref{fig:cmp_continuo},~\ref{fig:cmp_desigual} e~\ref{fig:cmp_real} reúnem os gráficos comparativos SOM $\times$ GNG de cada caso, e a Figura~\ref{fig:reconstrucoes} ilustra reconstruções representativas.
 
 \begin{table}[h]
 \centering
@@ -170,7 +172,7 @@ GNG & 256 neurônios          & \textbf{0.0084} & 0.0117 & 205.7 \\
 \begin{table}[h]
 \centering
 \small
-\caption{Caso \textbf{Real} --- flyer da banda Sinner ($1080\times1350$).}
+\caption{Caso \textbf{Real} --- flyer da banda Cinner ($1080\times1350$).}
 \label{tab:real}
 \begin{tabularx}{\textwidth}{llccc}
 \toprule
@@ -186,16 +188,28 @@ GNG & 256 neurônios          & \textbf{0.0262} & 0.0046 & 94.0 \\
 \end{tabularx}
 \end{table}
 
-\begin{figure}[h]
+\begin{figure}[htbp]
 \centering
-\includegraphics[width=0.8\textwidth]{comparativo_continuo.png}\\[0.4em]
-\includegraphics[width=0.8\textwidth]{comparativo_desigual.png}\\[0.4em]
-\includegraphics[width=0.8\textwidth]{comparativo_real.png}
-\caption{Comparação SOM vs. GNG por número de cores (K) nos três casos (de cima para baixo: contínuo, desigual e real). Em todos os painéis, menor é melhor. Note a escala do erro topológico (direita) no caso desigual, uma ordem de grandeza acima dos demais.}
-\label{fig:comparativos}
+\includegraphics[width=\textwidth]{comparativo_continuo.png}
+\caption{Caso \textbf{contínuo}: comparação SOM vs. GNG por número de cores (K). Menor é melhor. O erro topológico (direita) permanece baixo para ambas as redes.}
+\label{fig:cmp_continuo}
 \end{figure}
 
-\begin{figure}[h]
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{comparativo_desigual.png}
+\caption{Caso \textbf{desigual}: comparação SOM vs. GNG por número de cores (K). Menor é melhor. Observe a escala do erro topológico (direita): o SOM atinge $0{,}2555$ em K=256, uma ordem de grandeza acima dos demais casos.}
+\label{fig:cmp_desigual}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{comparativo_real.png}
+\caption{Caso \textbf{real} (flyer): comparação SOM vs. GNG por número de cores (K). Menor é melhor. O erro topológico do SOM cresce com o grid, em patamar intermediário entre os casos contínuo e desigual.}
+\label{fig:cmp_real}
+\end{figure}
+
+\begin{figure}[htbp]
 \centering
 \includegraphics[width=0.49\textwidth]{desigual_som_16x16.png}
 \includegraphics[width=0.49\textwidth]{desigual_gng_256.png}
