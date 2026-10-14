@@ -26,15 +26,16 @@
 # PIPELINE (conforme o enunciado):
 #   1. Extracao ......... carregar imagem, extrair pixels, normalizar RGB p/ [0,1]
 #   2. Treinamento ...... SOM (grids 4x4, 8x8, 16x16) e GNG (16, 64, 256 neuronios)
-#   3. Inferencia ....... para cada pixel, achar o neuronio vencedor (BMU) e
+#   3. Hiperparametros .. experimento variando as taxas de aprendizado (SOM e GNG)
+#   4. Inferencia ....... para cada pixel, achar o neuronio vencedor (BMU) e
 #                         trocar a cor do pixel pela cor dos PESOS desse neuronio
-#   4. Reconstrucao ..... remontar a matriz da imagem com as novas cores e exibir
-#   5. Avaliacao ........ erro de quantizacao e erro topologico
+#   5. Reconstrucao ..... remontar a matriz da imagem com as novas cores e exibir
+#   6. Avaliacao ........ erro de quantizacao (EQ) e erro topologico (ET)
 #
 # Como rodar:
 #   python -m venv .venv && source .venv/bin/activate
 #   pip install numpy pillow matplotlib minisom scipy
-#   python quantizacao_cores_project2.py --imagem imagens_treino/flyer.png
+#   python quantizacao_cores_project2.py --imagem imagens_treino/gradiente.png
 # ==============================================================================
 
 import argparse
@@ -77,7 +78,7 @@ def carregar_pixels(caminho_imagem):
       de aprendizado (um passo de 0.1 significa a mesma coisa em qualquer canal).
     """
     # convert("RGB") descarta um eventual canal alfa (transparencia) e garante
-    # exatamente 3 canais por pixel - flyers costumam ser PNG com alfa.
+    # exatamente 3 canais por pixel.
     imagem = Image.open(caminho_imagem).convert("RGB")
     matriz = np.asarray(imagem, dtype=np.float32)  # (altura, largura, 3)
     forma = matriz.shape
@@ -92,7 +93,7 @@ def carregar_pixels(caminho_imagem):
 def amostrar_pixels(pixels, n_amostras, semente=SEED):
     """Sorteia um subconjunto de pixels para acelerar o treino.
 
-    POR QUE AMOSTRAR? Uma imagem 1350x1080 tem ~1.46 milhao de pixels. Treinar
+    POR QUE AMOSTRAR? Uma imagem 4500x4500 tem 20,25 milhoes de pixels. Treinar
     SOM/GNG em todos eles e desnecessario: uma amostra aleatoria de algumas
     dezenas de milhares de pixels ja representa MUITO bem a distribuicao de
     cores. A INFERENCIA (trocar a cor de cada pixel) continua sendo feita em
@@ -125,7 +126,7 @@ class GrowingNeuralGas:
     """GNG para quantizacao vetorial (cada neuronio e um vetor de cor RGB).
 
     Parametros (hiperparametros do algoritmo, todos com significado explicado):
-      n_neuronios_max : tamanho-alvo da paleta (o treino para ao atingir isso).
+      n_neuronios_max : tamanho-alvo da paleta (o treino para de crescer ao atingir).
       max_epocas      : quantas passagens completas pela amostra de treino.
       eps_b           : passo de correcao do VENCEDOR (BMU) em direcao ao dado.
       eps_n           : passo de correcao dos VIZINHOS do vencedor (bem menor).
@@ -139,7 +140,7 @@ class GrowingNeuralGas:
                         (faz o erro recente pesar mais que o antigo).
     """
 
-    def __init__(self, n_neuronios_max=64, max_epocas=20,
+    def __init__(self, n_neuronios_max=64, max_epocas=10,
                  eps_b=0.05, eps_n=0.006, idade_max=50,
                  lambda_insercao=200, alpha=0.5, beta=0.0005, semente=SEED):
         self.n_neuronios_max = n_neuronios_max
@@ -184,33 +185,32 @@ class GrowingNeuralGas:
 
     # --- passo 0: inicializacao -----------------------------------------------
     def _inicializar(self, dados):
-        """Comeca com DOIS neuronios em posicoes aleatorias tiradas dos dados.
+        """Comeca com DOIS neuronios em posicoes distintas tiradas dos dados.
 
-        Escolher pontos reais dos dados (e nao vetores aleatorios no cubo RGB)
-        ja coloca os prototipos dentro da nuvem de cores desde o inicio.
+        Sorteamos a partir das cores UNICAS da amostra para garantir que os dois
+        primeiros neuronios nao nasçam exatamente com a mesma cor (o que causaria
+        empate de distancia em imagens com grandes areas de fundo chapado).
         """
-        idx = self.rng.choice(len(dados), size=2, replace=False)
-        self.pesos = [dados[idx[0]].astype(np.float64).copy(),
-                      dados[idx[1]].astype(np.float64).copy()]
+        cores_unicas = np.unique(dados, axis=0)
+        fonte = cores_unicas if len(cores_unicas) >= 2 else dados
+        idx = self.rng.choice(len(fonte), size=2, replace=False)
+        self.pesos = [fonte[idx[0]].astype(np.float64).copy(),
+                      fonte[idx[1]].astype(np.float64).copy()]
         self.erro = [0.0, 0.0]
         self.arestas = {}
         self._conectar(0, 1)
 
     # --- passo 1: achar os dois neuronios mais proximos de uma amostra --------
     def _dois_mais_proximos(self, x):
-        """Retorna (s1, s2): indices do vencedor (BMU) e do 2o colocado, e a
-        distancia AO QUADRADO do vencedor (usada para acumular o erro).
-
-        Usa distancia euclidiana ao quadrado (nao precisa da raiz para comparar,
-        e mais barato). O vencedor s1 e o neuronio cuja cor esta mais proxima da
-        cor da amostra x; s2 e o segundo mais proximo.
+        """Retorna (s1, s2, dist_s1): indices do vencedor (BMU) e do 2o colocado,
+        e a distancia AO QUADRADO do vencedor (usada para acumular o erro).
         """
         P = np.asarray(self.pesos)              # (K, 3)
         d2 = np.sum((P - x) ** 2, axis=1)       # (K,) distancias^2
         s1 = int(np.argmin(d2))
-        dist_s1 = d2[s1]
-        d2[s1] = np.inf                          # "esconde" o vencedor
-        s2 = int(np.argmin(d2))                  # 2o mais proximo
+        dist_s1 = float(d2[s1])
+        d2[s1] = np.inf                         # "esconde" o vencedor
+        s2 = int(np.argmin(d2))                 # 2o mais proximo
         return s1, s2, dist_s1
 
     # --- passo principal: uma apresentacao de amostra ao GNG ------------------
@@ -224,7 +224,8 @@ class GrowingNeuralGas:
 
         # (2) envelhecer TODAS as arestas que saem do vencedor s1 (o tempo passa
         #     para as conexoes dele; as que nao forem reforcadas vao "morrer").
-        for j in self._vizinhos(s1):
+        vizinhos_s1 = self._vizinhos(s1)
+        for j in vizinhos_s1:
             self.arestas[self._chave(s1, j)] += 1
 
         # (3) acumular o erro do vencedor com a distancia^2 ate a amostra.
@@ -235,7 +236,7 @@ class GrowingNeuralGas:
         #     mover os VIZINHOS dele um pouco menos (passo eps_n). E o "puxao"
         #     competitivo: o prototipo vencedor se aproxima da cor observada.
         self.pesos[s1] += self.eps_b * (x - self.pesos[s1])
-        for j in self._vizinhos(s1):
+        for j in vizinhos_s1:
             self.pesos[j] += self.eps_n * (x - self.pesos[j])
 
         # (5) conectar s1 e s2 (ou zerar a idade se ja eram vizinhos). Observar
@@ -248,18 +249,19 @@ class GrowingNeuralGas:
         self._remover_arestas_velhas()
 
         # (7) decaimento global do erro (todo mundo esquece um pouco do passado).
+        fator_decaimento = 1.0 - self.beta
         for i in range(len(self.erro)):
-            self.erro[i] -= self.beta * self.erro[i]
+            self.erro[i] *= fator_decaimento
 
     def _remover_arestas_velhas(self):
         """Remove arestas com idade acima do limite e neuronios isolados."""
-        # 6a. tirar arestas velhas.
         velhas = [k for k, idade in self.arestas.items() if idade > self.idade_max]
+        if not velhas:
+            return
         for k in velhas:
             del self.arestas[k]
 
-        # 6b. tirar neuronios que ficaram sem nenhuma conexao. Remover um indice
-        #     desloca todos os indices seguintes, entao remontamos as estruturas.
+        # 6b. tirar neuronios que ficaram sem nenhuma conexao.
         conectados = set()
         for (a, b) in self.arestas:
             conectados.add(a)
@@ -268,18 +270,13 @@ class GrowingNeuralGas:
             return  # ninguem isolado
 
         # manter apenas neuronios conectados; se sobrarem <2, nao remove nada
-        # (o GNG precisa de pelo menos 2 neuronios para continuar).
         manter = sorted(conectados)
         if len(manter) < 2:
             return
         self._reindexar(manter)
 
     def _reindexar(self, manter):
-        """Reconstroi pesos/erro/arestas mantendo apenas os indices em 'manter'.
-
-        Cria um mapa "indice antigo -> indice novo" e reescreve tudo. Isso e
-        necessario porque nossas arestas guardam indices inteiros posicionais.
-        """
+        """Reconstroi pesos/erro/arestas mantendo apenas os indices em 'manter'."""
         mapa = {antigo: novo for novo, antigo in enumerate(manter)}
         self.pesos = [self.pesos[i] for i in manter]
         self.erro = [self.erro[i] for i in manter]
@@ -293,19 +290,11 @@ class GrowingNeuralGas:
     def _inserir_neuronio(self):
         """Insere um neuronio na regiao de MAIOR erro (onde a rede representa
         pior os dados). Este e o mecanismo de CRESCIMENTO do GNG.
-
-        Passos classicos:
-          q = neuronio com maior erro acumulado.
-          f = vizinho de q com maior erro.
-          novo neuronio r nasce no PONTO MEDIO entre q e f.
-          desfaz a aresta q-f e cria q-r e r-f (r entra "no meio").
-          reduz os erros de q e f (fator alpha) e da a r o erro de q.
         """
-        # q: maior erro global.
         q = int(np.argmax(self.erro))
         viz = self._vizinhos(q)
         if not viz:
-            return  # sem vizinhos nao ha onde inserir (nao deve ocorrer)
+            return
 
         # f: vizinho de q com maior erro.
         f = max(viz, key=lambda j: self.erro[j])
@@ -328,14 +317,9 @@ class GrowingNeuralGas:
         self.erro[f] *= self.alpha
         self.erro.append(self.erro[q])
 
-    # --- laco de treino ---------------------------------------------------------
+    # --- laco de treino -------------------------------------------------------
     def treinar(self, dados):
-        """Treina o GNG na amostra de pixels 'dados' (N, 3).
-
-        A cada 'lambda_insercao' amostras processadas, tenta inserir um neuronio
-        (ate atingir n_neuronios_max). Percorre os dados por 'max_epocas' vezes,
-        embaralhando a ordem a cada epoca.
-        """
+        """Treina o GNG na amostra de pixels 'dados' (N, 3)."""
         dados = np.asarray(dados, dtype=np.float64)
         self._inicializar(dados)
 
@@ -350,9 +334,6 @@ class GrowingNeuralGas:
                 if (contador % self.lambda_insercao == 0
                         and len(self.pesos) < self.n_neuronios_max):
                     self._inserir_neuronio()
-
-            # se ja atingiu o numero-alvo de neuronios, podemos parar de crescer
-            # mas continuamos refinando as posicoes ate acabar as epocas.
         return self
 
     # --- interface de quantizacao ---------------------------------------------
@@ -361,11 +342,7 @@ class GrowingNeuralGas:
         return np.clip(np.asarray(self.pesos), 0.0, 1.0)
 
     def quantizar(self, pixels):
-        """INFERENCIA: para cada pixel, acha o BMU e devolve o INDICE dele.
-
-        Retorna um array (N,) com o indice do neuronio vencedor de cada pixel.
-        A cor final do pixel sera paleta()[indice].
-        """
+        """INFERENCIA: para cada pixel, acha o BMU e devolve o INDICE dele."""
         return _bmu_indices(np.asarray(pixels), self.paleta())
 
 
@@ -375,25 +352,26 @@ class GrowingNeuralGas:
 # O SOM tambem e aprendizado competitivo, mas com topologia FIXA: os neuronios
 # vivem num grid 2D (ex.: 8x8 = 64 neuronios) e o treino atualiza o vencedor E
 # seus vizinhos NO GRID (funcao de vizinhanca gaussiana que encolhe com o tempo).
-# Usamos a MiniSom porque e madura, estavel e de codigo pequeno/legivel.
 # ==============================================================================
-def treinar_som(dados, lado, num_iteracoes=5000,
+def treinar_som(dados, lado, num_iteracoes=None,
                 sigma=None, learning_rate=0.5, semente=SEED):
     """Treina um SOM quadrado 'lado x lado' nos pixels 'dados' (N, 3).
 
     Parametros:
       lado            : lado do grid (4, 8 ou 16 -> 16, 64 ou 256 neuronios).
-      num_iteracoes   : numero de amostras apresentadas (treino aleatorio).
+      num_iteracoes   : numero de amostras apresentadas. Se None, escala com o
+                        numero de neuronios do grid para nao subtreinar K=256.
       sigma           : raio inicial da vizinhanca no grid (default = metade do
                         lado, para comecar cooperativo e ir especializando).
       learning_rate   : taxa de aprendizado inicial (decai ao longo do treino).
-
-    A entrada tem 3 dimensoes (R, G, B), entao input_len=3.
     """
+    k = lado * lado
+    if num_iteracoes is None:
+        # Escala o numero de iteracoes com o tamanho do grid (minimo de 15.000
+        # e ate ~38.400 para 16x16), garantindo convergencia justa em K=256.
+        num_iteracoes = max(15000, k * 150)
+
     if sigma is None:
-        # raio inicial ~ metade do grid: no comeco muitos vizinhos se movem
-        # juntos (organizacao global); com o tempo sigma decai e o ajuste vira
-        # local (refinamento fino de cada regiao de cor).
         sigma = max(1.0, lado / 2.0)
 
     som = MiniSom(
@@ -402,10 +380,7 @@ def treinar_som(dados, lado, num_iteracoes=5000,
         neighborhood_function="gaussian",
         random_seed=semente,
     )
-    # inicializa os pesos amostrando os proprios dados (comeca dentro da nuvem
-    # de cores, como fizemos no GNG).
     som.random_weights_init(dados)
-    # train_random apresenta amostras sorteadas; decaimento padrao de lr e sigma.
     som.train_random(dados, num_iteracoes, verbose=False)
     return som
 
@@ -423,12 +398,9 @@ def paleta_som(som):
 def _bmu_indices(pixels, paleta, bloco=100_000):
     """Para cada pixel, retorna o indice da cor mais proxima na paleta (o BMU).
 
-    POR QUE EM BLOCOS? Calcular a distancia de ~1.46M de pixels contra ate 256
-    cores de uma vez cria uma matriz gigante (N x K). Processar em blocos de
-    100 mil pixels mantem o uso de memoria baixo sem perder velocidade.
-
-    Formula da distancia^2 (sem raiz, pois so precisamos comparar):
-      ||p - c||^2 para cada pixel p e cada cor c da paleta; escolhemos o argmin.
+    POR QUE EM BLOCOS? Calcular a distancia de ate ~20 milhoes de pixels contra
+    256 cores de uma vez estouraria a memoria RAM. Processar em blocos de 100 mil
+    pixels mantem o uso de RAM baixo e totalmente vetorizado.
     """
     pixels = np.asarray(pixels, dtype=np.float32)
     paleta = np.asarray(paleta, dtype=np.float32)
@@ -436,7 +408,7 @@ def _bmu_indices(pixels, paleta, bloco=100_000):
     indices = np.empty(n, dtype=np.int32)
     for ini in range(0, n, bloco):
         fim = min(ini + bloco, n)
-        p = pixels[ini:fim][:, None, :]        # (b, 1, 3)
+        p = pixels[ini:fim][:, None, :]                     # (b, 1, 3)
         d2 = np.sum((p - paleta[None, :, :]) ** 2, axis=2)  # (b, K)
         indices[ini:fim] = np.argmin(d2, axis=1)
     return indices
@@ -452,98 +424,81 @@ def reconstruir_imagem(indices, paleta, forma):
 
 
 # ==============================================================================
-# 6. METRICAS: ERRO DE QUANTIZACAO E ERRO TOPOLOGICO
+# 6. METRICAS: ERRO DE QUANTIZACAO E ERRO TOPOLOGICO (VETORIZADOS)
 # ==============================================================================
-def erro_quantizacao(pixels, paleta, indices=None):
+def erro_quantizacao(pixels, paleta, indices=None, bloco=200_000):
     """Erro de quantizacao = distancia MEDIA (euclidiana) entre cada pixel e a
-    cor do seu neuronio vencedor.
-
-    E a medida de FIDELIDADE: quanto menor, mais parecida a imagem quantizada
-    fica da original. Reportamos a distancia real (com raiz) para ter unidade
-    interpretavel na escala [0, 1] de cada canal.
+    cor do seu neuronio vencedor. Calculado em blocos para economizar memoria
+    em imagens de altissima resolucao (ex.: 4500x4500).
     """
     pixels = np.asarray(pixels, dtype=np.float32)
     paleta = np.asarray(paleta, dtype=np.float32)
     if indices is None:
         indices = _bmu_indices(pixels, paleta)
-    diffs = pixels - paleta[indices]
-    dist = np.sqrt(np.sum(diffs ** 2, axis=1))
-    return float(np.mean(dist))
+
+    soma_dist = 0.0
+    n = len(pixels)
+    for ini in range(0, n, bloco):
+        fim = min(ini + bloco, n)
+        diffs = pixels[ini:fim] - paleta[indices[ini:fim]]
+        soma_dist += float(np.sum(np.sqrt(np.sum(diffs ** 2, axis=1))))
+    return soma_dist / n
 
 
-def erro_topologico_som(pixels, som):
+def erro_topologico_som(pixels, som, bloco=50_000):
     """Erro topologico do SOM = fracao de amostras cujo 1o e 2o BMU NAO sao
-    vizinhos no grid.
+    vizinhos no grid (distancia de Chebyshev > 1).
 
-    INTUICAO: se o mapa preserva bem a topologia, os dois neuronios mais
-    proximos de uma amostra devem estar lado a lado no grid. Quando o 1o e o 2o
-    colocado ficam distantes no grid, houve uma "dobra" no mapa (topologia mal
-    preservada). Quanto menor o erro, melhor a preservacao topologica.
+    Como a relacao de vizinhanca e simetrica (b1 vizinho de b2 <=> b2 vizinho
+    de b1), basta pegar os 2 menores indices via argpartition de forma
+    totalmente vetorizada!
     """
-    pesos = som.get_weights()                 # (lado, lado, 3)
-    lado_x, lado_y, _ = pesos.shape
-    grade = pesos.reshape(-1, 3)              # (K, 3)
+    pesos = som.get_weights()                 # (lado_x, lado_y, 3)
+    _, lado_y, _ = pesos.shape
+    grade = pesos.reshape(-1, 3).astype(np.float32)
     pixels = np.asarray(pixels, dtype=np.float32)
 
     violacoes = 0
-    bloco = 50_000
     for ini in range(0, len(pixels), bloco):
-        p = pixels[ini:ini + bloco][:, None, :]           # (b,1,3)
-        d2 = np.sum((p - grade[None, :, :]) ** 2, axis=2)  # (b,K)
-        # indices dos 2 mais proximos em cada linha (ordem interna nao garantida
-        # pelo argpartition, por isso reordenamos pelo valor logo abaixo).
-        dois = np.argpartition(d2, 1, axis=1)[:, :2]
-        # coordenadas 2D no grid a partir do indice achatado.
-        for linha_idx, par in enumerate(dois):
-            d_par = d2[linha_idx, par]
-            if d_par[0] <= d_par[1]:
-                b1, b2 = par[0], par[1]
-            else:
-                b1, b2 = par[1], par[0]
-            x1, y1 = divmod(b1, lado_y)
-            x2, y2 = divmod(b2, lado_y)
-            # vizinhos no grid = distancia de Chebyshev <= 1 (inclui diagonais).
-            if max(abs(x1 - x2), abs(y1 - y2)) > 1:
-                violacoes += 1
+        p = pixels[ini:ini + bloco][:, None, :]            # (b, 1, 3)
+        d2 = np.sum((p - grade[None, :, :]) ** 2, axis=2)  # (b, K)
+        dois = np.argpartition(d2, 1, axis=1)[:, :2]       # (b, 2)
+        x1, y1 = np.divmod(dois[:, 0], lado_y)
+        x2, y2 = np.divmod(dois[:, 1], lado_y)
+        dist_chebyshev = np.maximum(np.abs(x1 - x2), np.abs(y1 - y2))
+        violacoes += int(np.sum(dist_chebyshev > 1))
     return violacoes / len(pixels)
 
 
-def erro_topologico_gng(pixels, gng):
+def erro_topologico_gng(pixels, gng, bloco=50_000):
     """Erro topologico do GNG = fracao de amostras cujo 1o e 2o BMU NAO estao
-    ligados por uma ARESTA do grafo.
+    ligados por uma ARESTA do grafo aprendido.
 
-    No GNG a topologia sao as arestas aprendidas (nao um grid fixo). Se os dois
-    prototipos mais proximos de uma amostra nao estao conectados, a topologia
-    nao capturou bem aquela vizinhanca. E a definicao padrao de erro topologico
-    para GNG e o analogo direto do criterio usado no SOM.
+    Constroi uma matriz booleana de adjacencia (K x K) para verificar todas as
+    amostras do bloco instantaneamente via indexacao matricial NumPy.
     """
-    paleta = gng.paleta()
+    paleta = gng.paleta().astype(np.float32)
+    k = len(paleta)
     pixels = np.asarray(pixels, dtype=np.float32)
-    arestas = gng.arestas
 
-    def conectados(i, j):
-        chave = (i, j) if i < j else (j, i)
-        return chave in arestas
+    # Matriz de adjacencia simetrica (K, K) das arestas aprendidas
+    adj = np.zeros((k, k), dtype=bool)
+    for (a, b) in gng.arestas:
+        adj[a, b] = True
+        adj[b, a] = True
 
     violacoes = 0
-    bloco = 50_000
     for ini in range(0, len(pixels), bloco):
         p = pixels[ini:ini + bloco][:, None, :]
         d2 = np.sum((p - paleta[None, :, :]) ** 2, axis=2)
         dois = np.argpartition(d2, 1, axis=1)[:, :2]
-        for linha_idx, par in enumerate(dois):
-            d_par = d2[linha_idx, par]
-            if d_par[0] <= d_par[1]:
-                b1, b2 = int(par[0]), int(par[1])
-            else:
-                b1, b2 = int(par[1]), int(par[0])
-            if not conectados(b1, b2):
-                violacoes += 1
+        conectados = adj[dois[:, 0], dois[:, 1]]
+        violacoes += int(np.sum(~conectados))
     return violacoes / len(pixels)
 
 
 # ==============================================================================
-# 7. VISUALIZACAO: ORIGINAL vs QUANTIZADA + PALETA EXTRAIDA
+# 7. VISUALIZACAO: ORIGINAL vs QUANTIZADA + PALETA + GRAFICOS DE METRICAS
 # ==============================================================================
 def salvar_comparacao(caminho_saida, original_uint8, quantizada_uint8,
                       paleta, titulo, n_cores):
@@ -575,21 +530,15 @@ def salvar_comparacao(caminho_saida, original_uint8, quantizada_uint8,
 
 
 def salvar_grafico_comparativo(caminho_saida, resultados):
-    """Gera um grafico de barras comparando SOM x GNG em EQ e ET, por K.
-
-    'resultados' e a lista de tuplas (rede, cfg, K, EQ, ET, tempo) acumulada na
-    main. Produz dois paineis lado a lado (EQ e ET) para facilitar a leitura do
-    trade-off fidelidade x topologia entre as duas redes nas tres escalas.
-    """
+    """Gera um grafico de barras comparando SOM x GNG em EQ e ET, por K."""
     ks = [16, 64, 256]
-    eq_som = {k: None for k in ks}
-    eq_gng = {k: None for k in ks}
-    et_som = {k: None for k in ks}
-    et_gng = {k: None for k in ks}
+    eq_som = {k: 0.0 for k in ks}
+    eq_gng = {k: 0.0 for k in ks}
+    et_som = {k: 0.0 for k in ks}
+    et_gng = {k: 0.0 for k in ks}
     for rede, _cfg, k, eq, et, _dt in resultados:
         alvo_eq = eq_som if rede == "SOM" else eq_gng
         alvo_et = et_som if rede == "SOM" else et_gng
-        # casa o K obtido com o K-alvo mais proximo (GNG pode variar levemente).
         k_alvo = min(ks, key=lambda kk: abs(kk - k))
         alvo_eq[k_alvo] = eq
         alvo_et[k_alvo] = et
@@ -625,7 +574,94 @@ def salvar_grafico_comparativo(caminho_saida, resultados):
 
 
 # ==============================================================================
-# 8. EXECUCAO PRINCIPAL
+# 8. EXPERIMENTO DE HIPERPARAMETROS (TAXAS DE APRENDIZADO - SLIDE 3)
+# ==============================================================================
+def executar_experimento_taxas(dados_treino, pixels_avaliacao, pasta_saida):
+    """Cumpre o requisito do Slide 3: 'Considerar ajustes nos hiperparametros
+    (taxas) e avaliar as redes geradas usando o erro de quantizacao e topologico'.
+
+    Fixamos a escala intermediaria (K=64: SOM 8x8 e GNG 64) e testamos tres
+    regimes de taxa de aprendizado:
+      - Baixa : passos muito timidos (rede demora a abrir e cobrir o espaco RGB)
+      - Media : configuracao equilibrada (padrao adotado no script)
+      - Alta  : passos agressivos (os prototipos 'saltam' demais a cada amostra,
+                causando instabilidade e dobrando/rasgando a topologia).
+    """
+    print("\n" + "=" * 74)
+    print("EXPERIMENTO DE HIPERPARAMETROS (TAXAS DE APRENDIZADO) - Escala K=64")
+    print("=" * 74)
+
+    taxas_som = [
+        ("Baixa (0.05)", 0.05),
+        ("Media (0.50)", 0.50),
+        ("Alta (1.50)",  1.50),
+    ]
+    taxas_gng = [
+        ("Baixa (0.005 / 0.0005)", 0.005, 0.0005),
+        ("Media (0.050 / 0.0060)", 0.050, 0.0060),
+        ("Alta (0.300 / 0.0500)",  0.300, 0.0500),
+    ]
+
+    res_som = []
+    print("[SOM 8x8 - Variando learning_rate]")
+    for rotulo, lr in taxas_som:
+        t0 = time.time()
+        som = treinar_som(dados_treino, lado=8, learning_rate=lr)
+        pal = paleta_som(som)
+        eq = erro_quantizacao(pixels_avaliacao, pal)
+        et = erro_topologico_som(dados_treino, som)
+        dt = time.time() - t0
+        print(f"  Taxa {rotulo:<22} -> EQ={eq:.4f} | ET={et:.4f} | tempo={dt:.1f}s")
+        res_som.append((rotulo, eq, et))
+
+    res_gng = []
+    print("\n[GNG 64 - Variando (eps_b / eps_n)]")
+    for rotulo, eb, en in taxas_gng:
+        t0 = time.time()
+        gng = GrowingNeuralGas(n_neuronios_max=64, max_epocas=10, eps_b=eb, eps_n=en)
+        gng.treinar(dados_treino)
+        pal = gng.paleta()
+        eq = erro_quantizacao(pixels_avaliacao, pal)
+        et = erro_topologico_gng(dados_treino, gng)
+        dt = time.time() - t0
+        print(f"  Taxa {rotulo:<22} -> EQ={eq:.4f} | ET={et:.4f} | tempo={dt:.1f}s")
+        res_gng.append((rotulo, eq, et))
+
+    # Salva grafico do experimento de taxas para incluir nos slides/relatorio
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 8))
+
+    rotulos_s = [r[0] for r in res_som]
+    ax1.bar(rotulos_s, [r[1] for r in res_som], color="#1f77b4", width=0.5)
+    ax1.set_title("SOM 8x8: Erro de Quantizacao por Taxa")
+    ax1.set_ylabel("EQ (menor = melhor)")
+    ax1.grid(True, axis="y", ls="--", alpha=0.5)
+
+    ax2.bar(rotulos_s, [r[2] for r in res_som], color="#1f77b4", width=0.5)
+    ax2.set_title("SOM 8x8: Erro Topologico por Taxa")
+    ax2.set_ylabel("ET (menor = melhor)")
+    ax2.grid(True, axis="y", ls="--", alpha=0.5)
+
+    rotulos_g = [r[0] for r in res_gng]
+    ax3.bar(rotulos_g, [r[1] for r in res_gng], color="#ff7f0e", width=0.5)
+    ax3.set_title("GNG 64: Erro de Quantizacao por Taxa")
+    ax3.set_ylabel("EQ (menor = melhor)")
+    ax3.grid(True, axis="y", ls="--", alpha=0.5)
+
+    ax4.bar(rotulos_g, [r[2] for r in res_gng], color="#ff7f0e", width=0.5)
+    ax4.set_title("GNG 64: Erro Topologico por Taxa")
+    ax4.set_ylabel("ET (menor = melhor)")
+    ax4.grid(True, axis="y", ls="--", alpha=0.5)
+
+    fig.suptitle("Impacto das Taxas de Aprendizado em K=64 (SOM vs GNG)")
+    fig.tight_layout()
+    caminho_fig = os.path.join(pasta_saida, "experimento_taxas_k64.png")
+    fig.savefig(caminho_fig, dpi=130)
+    plt.close(fig)
+    print(f"[OK] Grafico do experimento de taxas salvo: {caminho_fig}")
+
+
+# ==============================================================================
+# 9. EXECUCAO PRINCIPAL
 # ==============================================================================
 def main():
     parser = argparse.ArgumentParser(
@@ -635,8 +671,12 @@ def main():
                         help="Caminho da imagem de entrada (PNG/JPG).")
     parser.add_argument("--amostras", type=int, default=20000,
                         help="Nº de pixels amostrados para TREINO (default 20000).")
+    parser.add_argument("--epocas-gng", type=int, default=10,
+                        help="Nº de epocas de treino do GNG (default 10).")
     parser.add_argument("--saida", default="resultados",
                         help="Pasta onde salvar as figuras de resultado.")
+    parser.add_argument("--pular-experimento-taxas", action="store_true",
+                        help="Se passado, pula o estudo de variacao de taxas.")
     args = parser.parse_args()
 
     os.makedirs(args.saida, exist_ok=True)
@@ -645,15 +685,15 @@ def main():
     print(f"[INFO] Carregando imagem: {args.imagem}")
     pixels, forma = carregar_pixels(args.imagem)
     original_uint8 = (pixels.reshape(forma) * 255).astype(np.uint8)
-    print(f"       Dimensoes: {forma[1]}x{forma[0]} px  "
-          f"({len(pixels):,} pixels, {len(np.unique(pixels, axis=0)):,} cores unicas)")
+    print(f"       Dimensoes: {forma[1]}x{forma[0]} px ({len(pixels):,} pixels)")
 
     dados_treino = amostrar_pixels(pixels, args.amostras)
-    print(f"       Amostra de treino: {len(dados_treino):,} pixels\n")
+    print(f"       Amostra de treino: {len(dados_treino):,} pixels "
+          f"({len(np.unique(dados_treino, axis=0)):,} cores unicas na amostra)\n")
 
     resultados = []  # linhas da tabela final
 
-    # ----- 2/3/4/5. SOM: grids 4x4, 8x8, 16x16 -------------------------------
+    # ----- 2/4/5/6. SOM: grids 4x4, 8x8, 16x16 --------------------------------
     print("=" * 74)
     print("SOM (Self-Organizing Map) - MiniSom")
     print("=" * 74)
@@ -664,7 +704,7 @@ def main():
         pal = paleta_som(som)
         idx = _bmu_indices(pixels, pal)
         eq = erro_quantizacao(pixels, pal, idx)
-        et = erro_topologico_som(dados_treino, som)  # topologico na amostra (rapido)
+        et = erro_topologico_som(dados_treino, som)
         quant = reconstruir_imagem(idx, pal, forma)
         nome = os.path.join(args.saida, f"som_{lado}x{lado}.png")
         salvar_comparacao(nome, original_uint8, quant, pal,
@@ -674,13 +714,13 @@ def main():
               f"EQ={eq:.4f}  ET={et:.4f}  tempo={dt:.1f}s  -> {nome}")
         resultados.append(("SOM", f"{lado}x{lado}", k, eq, et, dt))
 
-    # ----- 2/3/4/5. GNG: 16, 64, 256 neuronios -------------------------------
+    # ----- 2/4/5/6. GNG: 16, 64, 256 neuronios --------------------------------
     print("\n" + "=" * 74)
     print("GNG (Growing Neural Gas) - implementacao propria")
     print("=" * 74)
     for k in (16, 64, 256):
         t0 = time.time()
-        gng = GrowingNeuralGas(n_neuronios_max=k, max_epocas=20)
+        gng = GrowingNeuralGas(n_neuronios_max=k, max_epocas=args.epocas_gng)
         gng.treinar(dados_treino)
         pal = gng.paleta()
         idx = gng.quantizar(pixels)
@@ -709,7 +749,12 @@ def main():
     nome_cmp = os.path.join(args.saida, "comparativo_metricas.png")
     salvar_grafico_comparativo(nome_cmp, resultados)
     print(f"[OK] Grafico comparativo salvo: {nome_cmp}")
-    print(f"[OK] Figuras salvas em: {args.saida}/")
+
+    # ----- 3. EXPERIMENTO DE HIPERPARAMETROS (TAXAS) --------------------------
+    if not args.pular_experimento_taxas:
+        executar_experimento_taxas(dados_treino, pixels, args.saida)
+
+    print(f"\n[OK] Processamento concluido! Figuras salvas em: {args.saida}/")
 
 
 if __name__ == "__main__":
