@@ -4,24 +4,24 @@
 # Disciplina: Introducao as Redes Neurais Artificiais
 # Autor: Henrique Crepaldi (RA: 120410)
 #
-# Objetivo deste script (com foco DIDATICO):
+# Objetivo deste script
 #   Treinar um modelo generativo - um AUTOENCODER VARIACIONAL (VAE) - para o
 #   dataset Fashion-MNIST e EXPLORAR o espaco latente aprendido.
 #
-#   Conforme o enunciado, treinamos o VAE em DUAS configuracoes de espaco
-#   latente e ajustamos, para cada uma, a melhor topologia por otimizacao de
+#   Conforme o enunciado, treinei o VAE em DUAS configuracoes de espaco
+#   latente e ajustei, para cada uma, a melhor topologia por otimizacao de
 #   hiperparametros guiada pela FUNCAO DE CUSTO no conjunto de VALIDACAO:
 #
 #     - Espaco latente 2 dimensoes  (2D)
 #     - Espaco latente 8 dimensoes  (8D)
 #
-#   Depois, exploramos o espaco latente:
+#   Depois, explorei o espaco latente:
 #     - Grafico da representacao latente 2D (direto, pois ja e 2D).
 #     - Grafico da PROJECAO do espaco latente 8D em 2D via PCA (pois 8D nao
 #       cabe num grafico plano).
-#     - Em ambos, COLORIMOS os pontos pelos ROTULOS (classes de roupa).
+#     - Em ambos, COLORI os pontos pelos ROTULOS (classes de roupa).
 #
-#   E respondemos as perguntas do enunciado:
+#   E respondi as perguntas do enunciado:
 #     (a) Ha formacao de clusters no espaco latente?
 #     (b) Ha separacao dos rotulos no espaco latente?
 #     (c) A projecao (PCA) ilustra quanto da variancia?
@@ -64,11 +64,9 @@
 #   # pip install torch --index-url https://download.pytorch.org/whl/cu121
 #   pip install numpy matplotlib scikit-learn
 #   python vae_fashion_mnist_project3.py                 # roda tudo (rapido)
-#   python vae_fashion_mnist_project3.py --epocas 40     # treino mais longo
+#   python vae_fashion_mnist_project3.py --epocas 50     # treino mais longo
 #
 # OBS sobre GPU: o script detecta o dispositivo automaticamente (ver DEVICE).
-#   Aqui (sandbox) nao ha GPU, entao roda em CPU. Na sua maquina com a RTX 3050
-#   e PyTorch-CUDA instalado, o MESMO script usa a GPU sem alterar nada.
 # ==============================================================================
 
 import argparse
@@ -79,7 +77,7 @@ import time
 import urllib.request
 
 # Matplotlib precisa de um diretorio de cache gravavel; em alguns ambientes o
-# HOME e read-only. Definimos o MPLCONFIGDIR antes de importar o pyplot para
+# HOME e read-only. Defini o MPLCONFIGDIR antes de importar o pyplot para
 # evitar avisos e falhas. (Nao muda nenhum resultado numerico.)
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mplcache"))
 
@@ -128,7 +126,7 @@ NOMES_CLASSES = [
 # ==============================================================================
 # O Fashion-MNIST e distribuido no mesmo formato "idx" do MNIST classico: 4
 # arquivos .gz (imagens e rotulos de treino e de teste). Em vez de depender do
-# torchvision, baixamos os 4 arquivos direto de mirrors publicos e lemos o
+# torchvision, baixei os 4 arquivos direto de mirrors publicos e lemos o
 # formato binario na mao - deixa o script AUTOCONTIDO e transparente.
 #
 # Formato idx (big-endian):
@@ -222,7 +220,7 @@ def preparar_tensores(x_uint8, y_uint8):
       Os pixels vem em [0, 255]. Dividir por 255 leva tudo para [0, 1]. Essa e
       uma constante GLOBAL (nao depende de media/desvio dos dados), entao nao ha
       risco de vazamento de estatisticas do teste para o treino. Alem disso, com
-      a entrada em [0, 1] podemos usar a saida do decoder com sigmoide e o erro
+      a entrada em [0, 1] posso usar a saida do decoder com sigmoide e o erro
       de reconstrucao por entropia cruzada binaria (BCE) - padrao para VAE de
       imagens em [0, 1].
     """
@@ -247,7 +245,7 @@ def preparar_tensores(x_uint8, y_uint8):
 #                com sigmoide na saida (pixels reconstruidos em [0, 1]).
 #
 # POR QUE A REDE PREVE logvar E NAO sigma DIRETO?
-#   A variancia tem de ser POSITIVA. Se a rede previsse sigma direto, teriamos
+#   A variancia tem de ser POSITIVA. Se a rede previsse sigma direto, teria
 #   de forcar sigma > 0 (gambiarra). Prevendo logvar (o LOG da variancia), o
 #   valor pode ser qualquer real em (-inf, +inf) e recuperamos sigma de forma
 #   sempre positiva e numericamente estavel com sigma = exp(0.5 * logvar).
@@ -297,14 +295,14 @@ class VAE(nn.Module):
     def reparametrizar(self, mu, logvar):
         """TRUQUE DA REPARAMETRIZACAO (coracao do VAE).
 
-        PROBLEMA: queremos z ~ N(mu, sigma^2). Amostrar diretamente desse
+        PROBLEMA: quero z ~ N(mu, sigma^2). Amostrar diretamente desse
         Normal e uma operacao ESTOCASTICA e NAO-DIFERENCIAVEL em relacao a mu e
         sigma; o backpropagation nao consegue atravessar esse "no de sorteio" e
         o gradiente do erro NAO chega aos pesos do encoder (o fluxo trava).
 
         SOLUCAO: mover a aleatoriedade para fora do caminho dos parametros.
-        Em vez de sortear z do Normal(mu, sigma^2), sorteamos um ruido PADRAO
-        eps ~ N(0, I) (que NAO depende de nenhum peso) e montamos:
+        Em vez de sortear z do Normal(mu, sigma^2), sortear um ruido PADRAO
+        eps ~ N(0, I) (que NAO depende de nenhum peso) e montar:
 
             z = mu + sigma * eps
 
@@ -352,7 +350,7 @@ def custo_vae(x, x_rec, mu, logvar, beta=1.0):
        E essa regularizacao que deixa o espaco latente continuo/navegavel (o
        que torna o VAE um modelo generativo util, e nao so um compressor).
 
-    beta: peso do termo KL (beta=1 e o VAE classico). Deixamos como
+    beta: peso do termo KL (beta=1 e o VAE classico). Deixo como
     hiperparametro porque beta controla o equilibrio reconstrucao vs. latente
     organizado (ideia do "beta-VAE"); e um dos itens da busca.
 
@@ -474,8 +472,8 @@ def treinar_vae(modelo, carregador_treino, carregador_val, epocas, taxa_aprendiz
 #   - beta (peso do termo KL): equilibrio reconstrucao vs. latente regularizado
 #   - taxa de aprendizado
 #
-# Mantemos a grade enxuta de proposito: o objetivo e DIDATICO e tem de rodar em
-# tempo razoavel (inclusive em CPU). Na sua maquina com GPU da para ampliar.
+# Mantive a grade enxuta de proposito: o objetivo e DIDATICO e tem de rodar em
+# tempo razoavel (inclusive em CPU).
 
 def grade_hiperparametros():
     """Devolve a lista de configuracoes testadas na busca (mesma grade para 2D
@@ -741,7 +739,7 @@ def main():
     print(f"    treino+val: {x_treino_full.shape[0]} imagens | teste: {x_teste.shape[0]} imagens")
 
     # ---- 2) split treino/validacao SEM VAZAMENTO ---------------------------
-    # Separamos a validacao ANTES de qualquer treino. O embaralhamento usa a
+    # Separo a validacao ANTES de qualquer treino. O embaralhamento usa a
     # semente global, entao o split e reprodutivel. O TESTE (x_teste) nunca entra
     # na escolha de hiperparametros nem no early stopping.
     print("\n[2/5] Separando treino/validacao (90/10) - teste fica reservado ...")
