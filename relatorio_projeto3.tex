@@ -114,8 +114,8 @@ A Tabela~\ref{tab:resultados} apresenta as configurações vencedoras e as \text
 \toprule
 \textbf{Modelo} & \textbf{Topologia (ocultas)} & \textbf{$\beta$} & \textbf{Loss val.} & \textbf{Loss teste} & \textbf{Recon. / KL (teste)} \\
 \midrule
-VAE 2D & [512, 256, 128] & 1{,}0 & 258{,}66 & 254{,}80 & 247{,}90 / 6{,}91 \\
-VAE 8D & [512, 256]      & 1{,}0 & 241{,}65 & 239{,}19 & 227{,}19 / 11{,}99 \\
+VAE 2D & [512, 256, 128] & 1{,}0 & 258{,}18 & 254{,}10 & 247{,}25 / 6{,}86 \\
+VAE 8D & [512, 256]      & 1{,}0 & 241{,}47 & 239{,}00 & 226{,}83 / 12{,}17 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -180,15 +180,15 @@ Como o espaço latente 2D é diretamente visualizável, geramos ainda o \textbf{
 \textbf{Parcialmente, e de forma interpretável.} As classes \textbf{visualmente distintas} separam-se bem (calçados, bolsa e calça). Já as classes de \textbf{parte superior do corpo} --- camiseta/top, pulôver, casaco, camisa e vestido --- \textbf{sobrepõem-se} entre si, o que é esperado: são peças genuinamente parecidas em imagens $28\times28$ (um VAE não supervisionado não tem incentivo para separar o que é visualmente semelhante). A sobreposição, portanto, é um resultado coerente, e não uma falha do modelo.
 
 \textbf{(c) A projeção ilustra quanto da variância?}
-A projeção PCA do espaço latente \textbf{8D} em 2D explica \textbf{19{,}4\%} (PC1) $+$ \textbf{18{,}4\%} (PC2) $=$ \textbf{37{,}8\%} da variância total. Ou seja, dois componentes capturam pouco mais de um terço da variabilidade dos 8 eixos latentes --- por isso o painel da direita aparece mais ``misturado'' que o da esquerda: cerca de \textbf{62\%} da estrutura do espaço 8D vive em dimensões que a projeção 2D simplesmente não mostra. Isso ilustra bem o compromisso entre \textbf{capacidade} (o 8D reconstrói melhor) e \textbf{visualizabilidade} (o 2D, por já ser bidimensional, é trivialmente mais legível em um gráfico plano).
+A projeção PCA do espaço latente \textbf{8D} em 2D explica \textbf{19{,}1\%} (PC1) $+$ \textbf{19{,}0\%} (PC2) $=$ \textbf{38{,}1\%} da variância total. Ou seja, dois componentes capturam pouco mais de um terço da variabilidade dos 8 eixos latentes --- por isso o painel da direita aparece mais ``misturado'' que o da esquerda: cerca de \textbf{62\%} da estrutura do espaço 8D vive em dimensões que a projeção 2D simplesmente não mostra. Isso ilustra bem o compromisso entre \textbf{capacidade} (o 8D reconstrói melhor) e \textbf{visualizabilidade} (o 2D, por já ser bidimensional, é trivialmente mais legível em um gráfico plano).
 
 \section{Conclusões}
 
-Treinou-se com sucesso um VAE generativo para o Fashion-MNIST nas duas configurações pedidas, com topologias selecionadas pela loss de validação e sem vazamento do conjunto de teste. O \textbf{truque da reparametrização} foi o elemento que viabilizou o treino por retropropagação, ao tornar a amostragem latente diferenciável. A exploração confirmou que o espaço latente forma \textbf{clusters} coerentes com as classes (sem jamais usar os rótulos no treino), que a \textbf{separação} é nítida para classes visualmente distintas e esperadamente parcial para as classes de parte superior, e que a projeção PCA do 8D ilustra \textbf{37{,}8\%} da variância --- evidenciando o compromisso entre capacidade latente e facilidade de visualização. Por fim, a geração de peças inéditas a partir de $\mathcal{N}(0, I)$ comprova o caráter generativo do modelo.
+Treinou-se com sucesso um VAE generativo para o Fashion-MNIST nas duas configurações pedidas, com topologias selecionadas pela loss de validação e sem vazamento do conjunto de teste. O \textbf{truque da reparametrização} foi o elemento que viabilizou o treino por retropropagação, ao tornar a amostragem latente diferenciável. A exploração confirmou que o espaço latente forma \textbf{clusters} coerentes com as classes (sem jamais usar os rótulos no treino), que a \textbf{separação} é nítida para classes visualmente distintas e esperadamente parcial para as classes de parte superior, e que a projeção PCA do 8D ilustra \textbf{38{,}1\%} da variância --- evidenciando o compromisso entre capacidade latente e facilidade de visualização. Por fim, a geração de peças inéditas a partir de $\mathcal{N}(0, I)$ comprova o caráter generativo do modelo.
 
 \vspace{0.6em}
 \hrule
 \vspace{0.4em}
-{\footnotesize \textit{Observação de reprodutibilidade.} Todos os números e figuras deste relatório foram produzidos por \texttt{vae\_fashion\_mnist\_project3.py} com \textit{Seed}~$=42$. O script detecta automaticamente o dispositivo (CPU ou GPU); os resultados aqui reportados foram obtidos em CPU com 35 épocas de re-treino final e busca de 8 épocas por configuração. Pequenas variações numéricas podem ocorrer entre diferentes versões de bibliotecas ou \textit{hardware}.}
+{\footnotesize \textit{Observação de reprodutibilidade.} Todos os números e figuras deste relatório foram produzidos por \texttt{vae\_fashion\_mnist\_project3.py} com \textit{Seed}~$=42$. O script detecta automaticamente o dispositivo (CPU ou GPU); os resultados aqui reportados foram obtidos em \textbf{GPU (NVIDIA GeForce RTX 3050 Laptop)} com 50 épocas de re-treino final (interrompidas por \textit{early stopping}) e busca de 8 épocas por configuração. Pequenas variações numéricas podem ocorrer entre diferentes versões de bibliotecas ou \textit{hardware}.}
 
 \end{document}
