@@ -111,6 +111,11 @@ torch.manual_seed(SEED)
 # entao o MESMO script roda nos dois cenarios sem alteracao.
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Exibe o dispositivo em uso e o nome da GPU, se disponivel
+print(f"Dispositivo em uso: {DEVICE}")
+if DEVICE.type == "cuda":
+    print(f"GPU detectada: {torch.cuda.get_device_name(0)}")
+
 # Nomes das 10 classes do Fashion-MNIST (rotulo 0..9), para legendas dos graficos.
 NOMES_CLASSES = [
     "Camiseta/top", "Calca", "Pulover", "Vestido", "Casaco",
