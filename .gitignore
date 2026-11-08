@@ -15,3 +15,7 @@ resultados_img02/
 *.out
 *.toc
 .texbuild/
+
+# Projeto 3 - cache do dataset e do matplotlib (nao versionar)
+dados_fashion_mnist/
+.mplcache/
