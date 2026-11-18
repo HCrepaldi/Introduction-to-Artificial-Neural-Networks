@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador Metabólico - Diabetes Tipo 1</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.1.0/dist/chartjs-plugin-annotation.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .card { background: white; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        .gluc-display { transition: color 0.3s ease; }
+        input[type=number] { -moz-appearance: textfield; }
+        
+        /* Toggles Customizados */
+        .dot { top: -.25rem; left: -.25rem; transition: all 0.3s ease-in-out; }
+        input:checked ~ .dot { transform: translateX(100%); background-color: #48bb78; }
+        input:checked ~ .bg-gray-300 { background-color: #48bb78; }
+        
+        /* Cor Glucagon (Laranja) */
+        input#toggleGlucagon:checked ~ .bg-gray-300 { background-color: #ed8936; }
+        input#toggleGlucagon:checked ~ .dot { background-color: #ed8936; }
+
+        /* Cor Bolus Duplo (Roxo) */
+        input#toggleDualWave:checked ~ .bg-gray-300 { background-color: #9f7aea; }
+        input#toggleDualWave:checked ~ .dot { background-color: #9f7aea; }
+
+        .trend-arrow { font-family: sans-serif; font-weight: bold; display: inline-block; width: 40px; text-align: center; }
+    </style>
+</head>
+<body class="p-4 md:p-8 min-h-screen">
+
+    <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <div class="card p-6 lg:col-span-4 h-fit flex flex-col gap-4 border-t-4 border-blue-600">
+            <h2 class="text-xl font-bold text-gray-800 border-b pb-2 flex items-center gap-2">
+                <span>⚙️ Parâmetros</span>
+            </h2>
+            
+            <div class="bg-blue-50 p-3 rounded-lg border border-blue-100 space-y-2">
+                <h3 class="text-xs font-bold text-blue-700 uppercase tracking-wide">Perfil Médico</h3>
+                <div>
+                    <label class="block text-xs text-gray-600 font-medium">Glicemia Inicial</label>
+                    <input type="number" id="startGluc" value="100" min="0" oninput="validateInput(this); updateBolusSuggestion()" class="w-full border rounded p-2 text-gray-700 font-mono focus:ring-2 focus:ring-blue-400 outline-none">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs text-gray-600 font-medium">Sensibilidade (FSI)</label>
+                        <input type="number" id="isf" value="30" min="1" oninput="validateInput(this); updateBolusSuggestion()" class="w-full border rounded p-2 text-sm text-gray-700 font-mono outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-600 font-medium">Relação I:C (g)</label>
+                        <input type="number" id="icr" value="10" min="1" oninput="validateInput(this); updateBolusSuggestion()" class="w-full border rounded p-2 text-sm text-gray-700 font-mono outline-none">
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-gray-50 p-3 rounded-lg border border-gray-200 space-y-2">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-xs font-bold text-gray-600 uppercase tracking-wide">Basal</h3>
+                    <label for="toggleBasalCalc" class="flex items-center cursor-pointer select-none">
+                        <div class="relative">
+                            <input type="checkbox" id="toggleBasalCalc" class="sr-only" onchange="togglePanel('basalSuggestionPanel', this)">
+                            <div class="w-8 h-4 bg-gray-300 rounded-full shadow-inner transition-colors"></div>
+                            <div class="dot absolute w-6 h-6 bg-white rounded-full shadow -left-1 -top-1 transition"></div>
+                        </div>
+                        <div class="ml-2 text-[10px] text-gray-500 font-bold uppercase">Calc</div>
+                    </label>
+                </div>
+                <div id="basalSuggestionPanel" class="hidden bg-white p-2 rounded border border-gray-300 mb-2">
+                    <div class="mb-1 text-center"><label class="text-[10px] text-gray-500">Peso (kg)</label> <input type="number" id="patientWeight" value="70" class="w-16 border rounded text-center text-sm" oninput="updateBasalSuggestion()"></div>
+                    <div class="text-center"><span class="text-[10px] uppercase block">Sugerido</span><span id="suggestedBasalValue" class="font-bold text-gray-700">0.80 UI/h</span></div>
+                </div>
+                <input type="number" id="basal" value="0.8" step="0.01" class="w-full border rounded p-2 text-sm font-bold font-mono outline-none">
+            </div>
+
+            <div class="bg-orange-50 p-3 rounded-lg border border-orange-200 space-y-2">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-xs font-bold text-orange-700 uppercase tracking-wide">🔥 Glucagon</h3>
+                    <label for="toggleGlucagon" class="flex items-center cursor-pointer select-none">
+                        <div class="relative">
+                            <input type="checkbox" id="toggleGlucagon" class="sr-only" onchange="togglePanel('glucagonOptionsPanel', this)">
+                            <div class="w-8 h-4 bg-gray-300 rounded-full shadow-inner transition-colors"></div>
+                            <div class="dot absolute w-6 h-6 bg-white rounded-full shadow -left-1 -top-1 transition"></div>
+                        </div>
+                        <div class="ml-2 text-[10px] text-gray-500 font-bold uppercase">Ativar</div>
+                    </label>
+                </div>
+                <div id="glucagonOptionsPanel" class="hidden mt-2 p-2 bg-white/60 rounded border border-orange-200">
+                    <select id="glucagonMode" class="w-full text-xs p-2 border rounded outline-none">
+                        <option value="defensive">Defensiva (< 70mg/dL)</option>
+                        <option value="uncontrolled">Descontrolada (Constante)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="bg-green-50 p-3 rounded-lg border border-green-100 space-y-2">
+                <h3 class="text-xs font-bold text-green-700 uppercase tracking-wide">Refeição</h3>
+                <div>
+                    <label class="block text-xs text-gray-600 font-medium">Carboidratos (g)</label>
+                    <input type="number" id="carbs" value="40" min="0" oninput="updateBolusSuggestion()" class="w-full border rounded p-2 font-mono outline-none">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div><label class="block text-xs text-gray-600">Proteínas (g)</label><input type="number" id="protein" value="25" class="w-full border rounded p-2 text-sm font-mono outline-none"></div>
+                    <div><label class="block text-xs text-gray-600">Gorduras (g)</label><input type="number" id="fat" value="20" class="w-full border rounded p-2 text-sm font-mono outline-none"></div>
+                </div>
+            </div>
+
+            <div class="bg-purple-50 p-3 rounded-lg border border-purple-100 space-y-3">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-xs font-bold text-purple-700 uppercase tracking-wide">Bolus (Insulina)</h3>
+                    <div class="flex gap-3">
+                        <label for="toggleBolusCalc" class="flex items-center cursor-pointer select-none">
+                            <div class="relative">
+                                <input type="checkbox" id="toggleBolusCalc" class="sr-only" onchange="togglePanel('bolusSuggestionPanel', this)">
+                                <div class="w-8 h-4 bg-gray-300 rounded-full shadow-inner"></div>
+                                <div class="dot absolute w-6 h-6 bg-white rounded-full shadow -left-1 -top-1 transition"></div>
+                            </div>
+                            <div class="ml-1 text-[9px] text-gray-500 font-bold uppercase">Calc</div>
+                        </label>
+                        <label for="toggleDualWave" class="flex items-center cursor-pointer select-none">
+                            <div class="relative">
+                                <input type="checkbox" id="toggleDualWave" class="sr-only" onchange="togglePanel('dualWavePanel', this)">
+                                <div class="w-8 h-4 bg-gray-300 rounded-full shadow-inner"></div>
+                                <div class="dot absolute w-6 h-6 bg-white rounded-full shadow -left-1 -top-1 transition"></div>
+                            </div>
+                            <div class="ml-1 text-[9px] text-purple-600 font-bold uppercase">Dual</div>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="bolusSuggestionPanel" class="hidden bg-white p-2 rounded border border-purple-200 text-center shadow-sm">
+                    <span class="text-[10px] text-gray-400 block uppercase">Dose Sugerida</span>
+                    <span id="suggestedBolusValue" class="text-xl font-bold text-purple-700">0.0 UI</span>
+                </div>
+
+                <div id="dualWavePanel" class="hidden bg-white p-2 rounded border border-purple-300 space-y-2">
+                    <div class="text-[10px] text-purple-800 font-bold uppercase text-center border-b border-purple-100 pb-1">Configuração Onda Dupla</div>
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="w-1/2">
+                            <label class="block text-[9px] text-gray-500">Divisão (Imediato %)</label>
+                            <input type="number" id="dualWaveSplit" value="60" min="10" max="90" class="w-full border border-purple-200 rounded p-1 text-center text-xs font-bold text-purple-700">
+                        </div>
+                        <div class="w-1/2">
+                            <label class="block text-[9px] text-gray-500">Duração (Horas)</label>
+                            <input type="number" id="dualWaveDuration" value="3" step="0.5" class="w-full border border-purple-200 rounded p-1 text-center text-xs font-bold text-purple-700">
+                        </div>
+                    </div>
+                    <div class="text-[9px] text-gray-400 text-center">O restante (40%) será estendido.</div>
+                </div>
+
+                <div>
+                    <label class="block text-xs text-gray-600 font-medium">Dose Total a Aplicar (UI)</label>
+                    <input type="number" id="insulin" value="5" min="0" step="0.5" class="w-full border rounded p-2 border-purple-200 font-mono text-lg font-bold text-purple-900 outline-none">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 mt-2">
+                <button onclick="resetSimulation()" class="col-span-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow-md transition transform active:scale-95">Reiniciar / Aplicar</button>
+                <button onclick="pauseSimulation()" id="btnPause" class="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 rounded-lg disabled:opacity-50">Pausar</button>
+                <button onclick="resumeSimulation()" id="btnResume" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 rounded-lg disabled:opacity-50">Continuar</button>
+            </div>
+        </div>
+
+        <div class="lg:col-span-8 flex flex-col gap-6">
+            <div class="card p-6 flex flex-col md:flex-row justify-between items-center bg-gray-900 text-white shadow-xl border-l-4 border-gray-700">
+                <div>
+                    <h2 class="text-gray-400 text-xs uppercase tracking-widest font-semibold flex items-center gap-2">
+                        <span id="statusIndicator" class="w-3 h-3 rounded-full bg-red-500"></span>
+                        Status: <span id="statusText" class="font-bold">Parado</span>
+                    </h2>
+                    <div class="text-xs text-gray-500 font-mono mt-2">Tempo: <span id="timerDisplay" class="text-white text-lg">00:00</span></div>
+                </div>
+                <div class="flex items-center gap-6 mt-4 md:mt-0 bg-gray-800 px-6 py-2 rounded-lg border border-gray-700">
+                    <div class="text-right">
+                        <div class="text-[10px] text-gray-400 uppercase tracking-widest">Glicemia</div>
+                        <div class="flex items-center justify-end gap-2">
+                            <div id="trendArrow" class="text-4xl text-gray-500 trend-arrow">→</div>
+                            <div id="bigGlucoseVal" class="text-6xl font-bold font-mono gluc-display tabular-nums">---</div>
+                        </div>
+                    </div>
+                    <div class="text-sm text-gray-500 self-end mb-3 font-medium">mg/dL</div>
+                </div>
+            </div>
+
+            <div class="card p-6 flex-grow relative">
+                <h2 class="text-lg font-bold text-gray-800 mb-4 flex justify-between">
+                    <span>Curva de Tendência (6h)</span>
+                    <span class="text-xs font-normal text-gray-400 bg-gray-100 px-2 py-1 rounded">1s = 5min</span>
+                </h2>
+                <div class="relative w-full h-[450px]">
+                    <canvas id="glucoseChart"></canvas>
+                </div>
+                <div class="mt-4 flex flex-wrap gap-6 justify-center text-xs text-gray-600 font-medium">
+                    <div class="flex items-center"><span class="w-3 h-3 bg-yellow-400 rounded-full mr-2 opacity-80"></span> Hiper</div>
+                    <div class="flex items-center"><span class="w-3 h-3 bg-green-500 rounded-full mr-2 opacity-80"></span> Alvo</div>
+                    <div class="flex items-center"><span class="w-3 h-3 bg-red-500 rounded-full mr-2 opacity-80"></span> Hipo</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- CONFIGURAÇÃO GLOBAL ---
+        let myChart = null, simulationInterval = null, currentStep = 0, simulationData = [], isRunning = false;
+        const TIME_STEP_MINUTES = 5;
+        const TOTAL_STEPS = (6 * 60) / TIME_STEP_MINUTES;
+
+        function validateInput(input) { if (input.value < 0) input.value = 0; }
+        
+        // --- FUNÇÕES DE UI ---
+        function togglePanel(panelId, checkbox) {
+            const panel = document.getElementById(panelId);
+            checkbox.checked ? panel.classList.remove('hidden') : panel.classList.add('hidden');
+            if(checkbox.checked) {
+                if(panelId === 'basalSuggestionPanel') updateBasalSuggestion();
+                if(panelId === 'bolusSuggestionPanel') updateBolusSuggestion();
+            }
+        }
+
+        function updateBasalSuggestion() {
+            const w = parseFloat(document.getElementById('patientWeight').value) || 0;
+            const res = (w * 0.55 * 0.5) / 24;
+            document.getElementById('suggestedBasalValue').innerText = res.toFixed(2) + " UI/h";
+        }
+
+        function updateBolusSuggestion() {
+            const inputs = getInputsUI(); 
+            const target = 100;
+            const meal = inputs.carbs / inputs.icr;
+            const corr = (inputs.startGluc - target) / inputs.isf;
+            let total = Math.max(0, meal + corr);
+            document.getElementById('suggestedBolusValue').innerText = total.toFixed(1) + " UI";
+        }
+
+        function getInputsUI() {
+            return {
+                startGluc: parseFloat(document.getElementById('startGluc').value) || 0,
+                isf: parseFloat(document.getElementById('isf').value) || 1,
+                icr: parseFloat(document.getElementById('icr').value) || 1,
+                weight: parseFloat(document.getElementById('patientWeight').value) || 70,
+                basal: parseFloat(document.getElementById('basal').value) || 0,
+                carbs: parseFloat(document.getElementById('carbs').value) || 0,
+                protein: parseFloat(document.getElementById('protein').value) || 0,
+                fat: parseFloat(document.getElementById('fat').value) || 0,
+                insulin: parseFloat(document.getElementById('insulin').value) || 0,
+                glucagonActive: document.getElementById('toggleGlucagon').checked,
+                glucagonMode: document.getElementById('glucagonMode').value,
+                dualWaveActive: document.getElementById('toggleDualWave').checked,
+                dualWaveSplit: parseFloat(document.getElementById('dualWaveSplit').value) || 100,
+                dualWaveDuration: parseFloat(document.getElementById('dualWaveDuration').value) || 0
+            };
+        }
+
+        // --- MOTOR FÍSICO (MATEMÁTICA) ---
+        function calculateGlucosePoints(inputs) {
+            let points = [];
+            
+            const estimatedBasalNeed = (inputs.weight * 0.55 * 0.5) / 24;
+            const liverProductionPerHour = estimatedBasalNeed * inputs.isf;
+            const risePerCarb = inputs.isf / inputs.icr;
+            
+            const fatProtKcal = (inputs.protein * 4) + (inputs.fat * 9);
+            const risePerFatProt = ((fatProtKcal / 100) * 10 * risePerCarb) * 0.6;
+
+            let immediateDose = inputs.insulin;
+            let extendedDose = 0;
+            let extendedDurationMin = 0;
+
+            if (inputs.dualWaveActive) {
+                const splitPct = inputs.dualWaveSplit / 100;
+                immediateDose = inputs.insulin * splitPct;
+                extendedDose = inputs.insulin * (1 - splitPct);
+                extendedDurationMin = inputs.dualWaveDuration * 60;
+            }
+
+            const totalImmediateDrop = immediateDose * inputs.isf;
+            const totalExtendedDrop = extendedDose * inputs.isf;
+
+            let cumulativeGlucagonReactive = 0;
+
+            for (let i = 0; i <= TOTAL_STEPS; i++) {
+                const t_min = i * TIME_STEP_MINUTES;
+                const t_hours = t_min / 60;
+
+                // 1. Carboidrato (Pico 1h)
+                let carbEffect = 0;
+                if (t_min > 10) { 
+                    let x = t_min / 60; 
+                    carbEffect = (x * Math.exp(-x)) * 2.7; 
+                }
+
+                // 2. Gordura (ACELERADA: Divisor 100 ao invés de 180)
+                // Isso comprime a ação para caber em ~5 horas para fins didáticos
+                let fpEffect = 0;
+                if (t_min > 60) { 
+                    let x = (t_min - 60) / 100; 
+                    fpEffect = (x * Math.exp(-x)) * 1.5; 
+                }
+
+                // 3. Insulina Imediata (Pico 1h15)
+                let insImmediateEffect = 0;
+                if (t_min > 10) { 
+                    let x = t_min / 75; 
+                    insImmediateEffect = (x * Math.exp(-x)) * 2.7; 
+                }
+
+                // 4. Insulina Estendida (Linear)
+                let extendedAbsorbedFraction = 0;
+                if (extendedDose > 0 && t_min > 15) {
+                    const effectiveTime = t_min - 15;
+                    extendedAbsorbedFraction = Math.min(effectiveTime / extendedDurationMin, 1);
+                }
+
+                // 5. Basal vs Fígado
+                const liverRiseTotal = liverProductionPerHour * t_hours;
+                const basalDropTotal = (inputs.basal * inputs.isf) * t_hours;
+                const backgroundDrift = liverRiseTotal - basalDropTotal;
+
+                // Absorção Acumulada
+                const cAbs = 1 - (1 / (1 + Math.pow(t_min/70, 3)));
+                
+                // CORREÇÃO: Impede valores negativos no tempo < 60 e usa curva mais rápida (divisor 100)
+                const fpAbs = t_min < 60 ? 0 : (1 - (1 / (1 + Math.pow((t_min-60)/100, 2))));
+                
+                const iImmedAbs = 1 - (1 / (1 + Math.pow(t_min/80, 3)));
+
+                let currentBaseGluc = inputs.startGluc 
+                    + (inputs.carbs * risePerCarb * cAbs) 
+                    + (risePerFatProt * fpAbs) 
+                    - (totalImmediateDrop * iImmedAbs)
+                    - (totalExtendedDrop * extendedAbsorbedFraction)
+                    + backgroundDrift;
+
+                let glucagonEffect = 0;
+                if (inputs.glucagonActive) {
+                    if (inputs.glucagonMode === 'uncontrolled') {
+                        glucagonEffect = 30 * t_hours; 
+                    } else if (inputs.glucagonMode === 'defensive') {
+                        if ((currentBaseGluc + cumulativeGlucagonReactive) < 70) {
+                            cumulativeGlucagonReactive += 3;
+                        }
+                        glucagonEffect = cumulativeGlucagonReactive;
+                    }
+                }
+
+                let finalGluc = currentBaseGluc + glucagonEffect;
+                points.push({ x: convertTime(t_min), y: Math.max(0, Math.round(finalGluc)) });
+            }
+            return points;
+        }
+
+        // --- CHART & HELPERS ---
+        function initChart() {
+            const ctx = document.getElementById('glucoseChart').getContext('2d');
+            if (myChart) myChart.destroy();
+            myChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: 'Glicemia', data: [], borderColor: '#2563eb', borderWidth: 4, pointRadius: 0, tension: 0.4 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false, animation: false,
+                    scales: { y: { min: 0, max: 400, grid: { color: '#e5e7eb' } }, x: { display: false } },
+                    plugins: { annotation: { annotations: {
+                        high: { type: 'box', yMin: 180, yMax: 1000, backgroundColor: 'rgba(250,204,21,0.1)', borderWidth:0 },
+                        target: { type: 'box', yMin: 70, yMax: 180, backgroundColor: 'rgba(34,197,94,0.1)', borderWidth:0 },
+                        low: { type: 'box', yMin: 0, yMax: 70, backgroundColor: 'rgba(239,68,68,0.1)', borderWidth:0 }
+                    }}, legend: { display: false } }
+                }
+            });
+        }
+
+        function getTrendArrow(curr, prev) {
+            if (!prev) return '→';
+            const rate = (curr - prev) / 5;
+            if (rate > 2) return '↑↑';
+            if (rate > 1) return '↑';
+            if (rate < -2) return '↓↓';
+            if (rate < -1) return '↓';
+            return '→';
+        }
+
+        function convertTime(m) { const h = Math.floor(m/60); const min = m%60; return `${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')}`; }
+
+        // --- EXECUÇÃO ---
+        function resetSimulation() {
+            clearInterval(simulationInterval); currentStep = 0; initChart();
+            simulationData = calculateGlucosePoints(getInputsUI());
+            resumeSimulation();
+        }
+
+        function resumeSimulation() {
+            if (currentStep >= simulationData.length) return;
+            document.getElementById('btnPause').disabled = false;
+            document.getElementById('btnResume').disabled = true;
+            document.getElementById('statusText').innerText = "Simulando";
+            document.getElementById('statusIndicator').className = "w-3 h-3 rounded-full bg-green-500 animate-pulse";
+            
+            simulationInterval = setInterval(() => {
+                if (currentStep >= simulationData.length) { pauseSimulation(); return; }
+                const p = simulationData[currentStep];
+                const prev = currentStep > 0 ? simulationData[currentStep-1] : null;
+                
+                myChart.data.labels.push(p.x); myChart.data.datasets[0].data.push(p.y); myChart.update('none');
+                document.getElementById('timerDisplay').innerText = p.x;
+                document.getElementById('bigGlucoseVal').innerText = p.y;
+                document.getElementById('trendArrow').innerText = getTrendArrow(p.y, prev ? prev.y : null);
+                
+                let color = p.y < 70 ? '#ef4444' : (p.y > 180 ? '#fbbf24' : '#22c55e');
+                document.getElementById('bigGlucoseVal').style.color = color;
+                document.getElementById('trendArrow').style.color = color;
+                currentStep++;
+            }, 1000);
+        }
+
+        function pauseSimulation() {
+            clearInterval(simulationInterval);
+            document.getElementById('btnPause').disabled = true;
+            document.getElementById('btnResume').disabled = false;
+            document.getElementById('statusText').innerText = "Pausado";
+            document.getElementById('statusIndicator').className = "w-3 h-3 rounded-full bg-yellow-500";
+        }
+
+        initChart(); updateBasalSuggestion(); updateBolusSuggestion();
+    </script>
+</body>
+</html>

@@ -4,19 +4,26 @@
 # Projeto 4 - Redes Neurais Recorrentes (RNNs): LSTM e GRU
 # Autor: Henrique Crepaldi - RA 120410
 #
-# Tema: Previsao de serie temporal de glicemia (CGM - Continuous Glucose
-#       Monitoring). Dado um historico de leituras de glicose, eu quero
-#       prever o valor da glicemia k passos a frente (previsao t+k).
+# Tema: Previsao de serie temporal de glicemia (previsao t+k). Dado um
+#       historico de leituras de glicose, eu quero prever o valor da glicemia
+#       k passos a frente.
 #
-# Observacao importante sobre os dados: eu NAO uso dados reais da minha bomba
-# de insulina para evitar qualquer questao de privacidade / dados pessoais de
-# saude. No lugar, eu gero uma serie sintetica fisiologicamente plausivel
-# (ritmo circadiano, picos pos-refeicao, efeito da insulina e ruido de sensor).
-# Essa e uma pratica padrao e defensavel em ML aplicado a saude.
+# Fonte dos dados: eu uso o MEU PROPRIO simulador metabolico de Diabetes
+# Tipo 1 (DM1), que eu construi originalmente para uma UC de Fisiologia
+# Humana 2 (arquivo simulador_dm1.html, incluido neste repositorio). Aqui eu
+# porto o motor fisico daquele simulador para Python e o uso para gerar as
+# series de glicemia que alimentam as redes recorrentes.
+#
+# Por que dados do simulador (e nao dados reais): eu convivo com DM1 e tenho
+# os relatorios da minha bomba de insulina, mas decidi NAO usa-los para evitar
+# expor dados pessoais de saude. O simulador me da series fisiologicamente
+# plausiveis, parametrizaveis e que eu entendo e consigo defender 100% na
+# banca, pois cada parametro tem significado clinico real (ISF, ICR, bolus,
+# basal, glucagon).
 # =============================================================================
 
 # Eu configuro o diretorio de cache do matplotlib ANTES de importa-lo, porque
-# o ambiente onde rodo tem o HOME somente-leitura. Assim evito o aviso/erro.
+# alguns ambientes tem o HOME somente-leitura. Assim evito o aviso/erro.
 import os
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/mpl-cache")
 
@@ -46,110 +53,227 @@ random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 
-# Eu rodo em CPU neste ambiente; se houver GPU disponivel, eu aproveito.
+# Eu rodo em CPU normalmente; se houver GPU disponivel, eu aproveito.
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Eu crio uma pasta para salvar as figuras do relatorio.
 FIG_DIR = "figuras_projeto4"
 os.makedirs(FIG_DIR, exist_ok=True)
 
+# Parametros de tempo do simulador (iguais ao HTML original).
+TIME_STEP_MINUTES = 5          # cada leitura a cada 5 min (como um CGM real)
+HORAS_POR_SIMULACAO = 6        # cada simulacao do motor cobre 6 horas
+PASSOS_POR_SIM = int((HORAS_POR_SIMULACAO * 60) / TIME_STEP_MINUTES)  # = 72
+
 
 # =============================================================================
-# 1) GERACAO DA SERIE TEMPORAL SINTETICA DE GLICEMIA (CGM)
+# 1) MOTOR FISICO DO SIMULADOR DE DM1 (PORTADO DO MEU HTML PARA PYTHON)
 # =============================================================================
-def gerar_serie_glicemia(n_dias=60, passo_min=5, seed=SEED):
-    """Eu gero uma serie de glicemia simulando um sensor CGM.
+# Aqui eu reescrevo, passo a passo, a mesma matematica do meu simulador. Mantive
+# os mesmos nomes e as mesmas constantes para que a versao Python seja fiel a
+# versao JavaScript. O motor soma varios efeitos concorrentes sobre a glicemia:
+#   - carboidrato (sobe),
+#   - gordura+proteina (sobe, com atraso),
+#   - insulina bolus imediata (desce),
+#   - insulina estendida / onda dupla (desce, linear),
+#   - producao hepatica vs insulina basal (deriva de fundo),
+#   - glucagon (defensivo abaixo de 70 mg/dL, ou descontrolado).
+def calcular_pontos_glicose(inp):
+    """Eu replico calculateGlucosePoints() do meu simulador HTML.
 
-    A ideia e produzir um sinal realista o suficiente para que o problema de
-    previsao t+k seja interessante, mas sem usar dados reais. Eu modelo:
-      - uma linha de base (nivel basal de glicose);
-      - um ritmo circadiano (a glicose oscila ao longo do dia);
-      - picos pos-refeicao (cafe, almoco, jantar) que sobem rapido e decaem;
-      - o efeito da insulina (puxa a glicose para baixo depois das refeicoes);
-      - ruido de sensor (pequenas flutuacoes de medicao).
+    `inp` e um dicionario com os mesmos campos do simulador. Eu retorno o vetor
+    de glicemia (mg/dL) amostrado a cada 5 min ao longo de 6 horas.
+    """
+    pontos = []
 
-    Parametros:
-      n_dias   : quantos dias de dados eu simulo.
-      passo_min: intervalo entre leituras, em minutos (CGM real ~5 min).
-      seed     : semente local para reproduzir exatamente a mesma serie.
+    # Necessidade basal estimada e producao hepatica correspondente. A ideia
+    # clinica: o figado produz glicose o tempo todo; a insulina basal compensa.
+    necessidade_basal = (inp["weight"] * 0.55 * 0.5) / 24.0
+    producao_figado_por_hora = necessidade_basal * inp["isf"]
 
-    Retorno:
-      df: DataFrame com colunas de tempo e a leitura de glicose (mg/dL).
+    # Quanto cada grama de carboidrato sobe a glicemia (depende de ISF e ICR).
+    subida_por_carbo = inp["isf"] / inp["icr"]
+
+    # Efeito tardio de gordura+proteina, estimado a partir das calorias.
+    kcal_gord_prot = (inp["protein"] * 4.0) + (inp["fat"] * 9.0)
+    subida_gord_prot = ((kcal_gord_prot / 100.0) * 10.0 * subida_por_carbo) * 0.6
+
+    # Divisao do bolus em imediato + estendido quando eu uso onda dupla.
+    dose_imediata = inp["insulin"]
+    dose_estendida = 0.0
+    duracao_estendida_min = 0.0
+    if inp["dualWaveActive"]:
+        frac = inp["dualWaveSplit"] / 100.0
+        dose_imediata = inp["insulin"] * frac
+        dose_estendida = inp["insulin"] * (1.0 - frac)
+        duracao_estendida_min = inp["dualWaveDuration"] * 60.0
+
+    # Queda total de glicose que cada parte da insulina provoca.
+    queda_imediata_total = dose_imediata * inp["isf"]
+    queda_estendida_total = dose_estendida * inp["isf"]
+
+    glucagon_reativo_acumulado = 0.0
+
+    for i in range(PASSOS_POR_SIM + 1):
+        t_min = i * TIME_STEP_MINUTES
+        t_horas = t_min / 60.0
+
+        # (4) Fracao da insulina estendida ja absorvida (absorcao linear).
+        fracao_estendida = 0.0
+        if dose_estendida > 0 and t_min > 15:
+            tempo_efetivo = t_min - 15
+            fracao_estendida = min(tempo_efetivo / duracao_estendida_min, 1.0)
+
+        # (5) Deriva de fundo: producao do figado menos acao da insulina basal.
+        subida_figado = producao_figado_por_hora * t_horas
+        queda_basal = (inp["basal"] * inp["isf"]) * t_horas
+        deriva_fundo = subida_figado - queda_basal
+
+        # Absorcoes acumuladas (curvas sigmoidais que vao de 0 a 1 no tempo).
+        # Carboidrato: absorve rapido (divisor 70, expoente 3).
+        c_abs = 1.0 - (1.0 / (1.0 + (t_min / 70.0) ** 3))
+        # Gordura/proteina: so comeca depois de 60 min (evito valores negativos).
+        if t_min < 60:
+            fp_abs = 0.0
+        else:
+            fp_abs = 1.0 - (1.0 / (1.0 + ((t_min - 60) / 100.0) ** 2))
+        # Insulina imediata: absorve um pouco mais devagar que o carboidrato.
+        i_imed_abs = 1.0 - (1.0 / (1.0 + (t_min / 80.0) ** 3))
+
+        # Glicose base: eu somo tudo o que sobe e subtraio tudo o que desce.
+        glic_base = (
+            inp["startGluc"]
+            + (inp["carbs"] * subida_por_carbo * c_abs)
+            + (subida_gord_prot * fp_abs)
+            - (queda_imediata_total * i_imed_abs)
+            - (queda_estendida_total * fracao_estendida)
+            + deriva_fundo
+        )
+
+        # Efeito do glucagon (hormonio que sobe a glicose).
+        efeito_glucagon = 0.0
+        if inp["glucagonActive"]:
+            if inp["glucagonMode"] == "uncontrolled":
+                # Modo descontrolado: sobe de forma constante no tempo.
+                efeito_glucagon = 30.0 * t_horas
+            elif inp["glucagonMode"] == "defensive":
+                # Modo defensivo: so age quando a glicose cai abaixo de 70.
+                if (glic_base + glucagon_reativo_acumulado) < 70.0:
+                    glucagon_reativo_acumulado += 3.0
+                efeito_glucagon = glucagon_reativo_acumulado
+
+        glic_final = glic_base + efeito_glucagon
+        # Eu nunca permito glicose negativa (nao faz sentido fisiologico).
+        pontos.append(max(0.0, glic_final))
+
+    return np.array(pontos, dtype=np.float64)
+
+
+def inputs_padrao():
+    """Eu devolvo os mesmos valores default do meu simulador HTML."""
+    return {
+        "startGluc": 100.0, "isf": 30.0, "icr": 10.0, "weight": 70.0,
+        "basal": 0.8, "carbs": 40.0, "protein": 25.0, "fat": 20.0,
+        "insulin": 5.0, "glucagonActive": False, "glucagonMode": "defensive",
+        "dualWaveActive": False, "dualWaveSplit": 60.0, "dualWaveDuration": 3.0,
+    }
+
+
+# =============================================================================
+# 2) GERACAO DO DATASET: EU ENCADEIO VARIAS SIMULACOES DE 6h
+# =============================================================================
+# O simulador cobre 6h por rodada. Para ter uma serie longa e variada (como
+# dias inteiros de um paciente), eu encadeio muitas simulacoes: cada bloco de
+# 6h usa parametros sorteados (refeicao, dose, cenario) e comeca na glicemia em
+# que o bloco anterior terminou. Assim a serie fica continua e realista.
+def sortear_cenario(rng, glic_inicial):
+    """Eu monto um cenario de 6h com refeicao e dose sorteadas.
+
+    Eu vario os parametros clinicos dentro de faixas plausiveis e, de vez em
+    quando, ativo cenarios especiais (onda dupla ou glucagon) para enriquecer
+    o dataset com situacoes que a rede precisa aprender a prever.
+    """
+    inp = inputs_padrao()
+    inp["startGluc"] = float(np.clip(glic_inicial, 40, 300))
+
+    # Perfil do paciente (eu mantenho relativamente estavel entre blocos).
+    inp["isf"] = float(rng.uniform(25, 45))
+    inp["icr"] = float(rng.uniform(8, 15))
+    inp["basal"] = float(rng.uniform(0.6, 1.1))
+
+    # Refeicao sorteada: as vezes uma refeicao grande, as vezes um lanche leve.
+    inp["carbs"] = float(rng.choice([0, 15, 30, 45, 60, 80],
+                                    p=[0.1, 0.15, 0.2, 0.25, 0.2, 0.1]))
+    inp["protein"] = float(rng.uniform(0, 35))
+    inp["fat"] = float(rng.uniform(0, 30))
+
+    # Dose de insulina: eu parto da dose "ideal" sugerida pelo bolus calculator
+    # do meu simulador e adiciono um erro humano (as vezes a pessoa erra a conta
+    # ou chuta a dose). Esse erro e o que gera hiper e hipoglicemias realistas.
+    alvo = 100.0
+    dose_ideal = max(0.0, inp["carbs"] / inp["icr"]
+                     + (inp["startGluc"] - alvo) / inp["isf"])
+    erro_humano = rng.normal(0, 0.8)
+    inp["insulin"] = float(max(0.0, dose_ideal + erro_humano))
+
+    # Cenario especial 1: onda dupla (refeicao gordurosa) em ~20% dos blocos.
+    if rng.random() < 0.2 and inp["carbs"] > 0:
+        inp["dualWaveActive"] = True
+        inp["dualWaveSplit"] = float(rng.uniform(50, 70))
+        inp["dualWaveDuration"] = float(rng.uniform(2, 4))
+
+    # Cenario especial 2: glucagon defensivo (resgate de hipo) sempre ligado,
+    # imitando a contrarregulacao fisiologica que protege contra hipoglicemia.
+    inp["glucagonActive"] = True
+    inp["glucagonMode"] = "defensive"
+
+    return inp
+
+
+def gerar_serie_do_simulador(n_blocos=80, seed=SEED):
+    """Eu encadeio `n_blocos` simulacoes de 6h para formar a serie completa.
+
+    Entre um bloco e outro eu descarto o ponto repetido (o inicio de um bloco
+    e o fim do anterior) para nao duplicar amostras. No fim eu adiciono um
+    pequeno ruido de sensor, como num CGM real.
     """
     rng = np.random.default_rng(seed)
+    serie = []
+    glic_atual = 120.0  # glicemia inicial do primeiro bloco
 
-    # Numero de leituras por dia e no total.
-    leituras_por_dia = int(24 * 60 / passo_min)
-    n = n_dias * leituras_por_dia
+    registros = []  # eu guardo metadados de cada bloco para inspecao
+    for b in range(n_blocos):
+        inp = sortear_cenario(rng, glic_atual)
+        pontos = calcular_pontos_glicose(inp)
 
-    # Vetor de tempo em minutos desde o inicio e a "hora do dia" (0-24h).
-    t_min = np.arange(n) * passo_min
-    hora_do_dia = (t_min / 60.0) % 24.0
+        # No primeiro bloco eu uso todos os pontos; nos demais eu descarto o
+        # primeiro ponto (que repete o fim do bloco anterior).
+        if b == 0:
+            serie.extend(pontos.tolist())
+        else:
+            serie.extend(pontos[1:].tolist())
 
-    # (a) Nivel basal de glicose (mg/dL). Um valor saudavel de jejum.
-    basal = 100.0
+        glic_atual = pontos[-1]
+        registros.append({"bloco": b, "carbs": inp["carbs"],
+                          "insulin": round(inp["insulin"], 2),
+                          "dual": inp["dualWaveActive"],
+                          "glic_fim": round(glic_atual, 1)})
 
-    # (b) Ritmo circadiano: eu uso uma senoide suave ao longo de 24h. A glicose
-    # tende a ser um pouco mais alta de manha (fenomeno do alvorecer).
-    circadiano = 12.0 * np.sin(2 * np.pi * (hora_do_dia - 6) / 24.0)
+    serie = np.array(serie, dtype=np.float64)
 
-    # (c) Picos pos-refeicao: para cada dia eu disparo tres refeicoes em horarios
-    # proximos de 7h, 12h e 19h, com variacao aleatoria de horario e tamanho.
-    refeicoes = np.zeros(n)
-    insulina = np.zeros(n)
-    for dia in range(n_dias):
-        for hora_base, tam_base in [(7.0, 55.0), (12.0, 70.0), (19.0, 60.0)]:
-            # Eu sorteio pequenas variacoes de horario e intensidade por dia.
-            hora = hora_base + rng.normal(0, 0.4)
-            tamanho = max(10.0, tam_base + rng.normal(0, 15.0))
+    # Ruido de sensor: pequenas flutuacoes de medicao a cada leitura.
+    serie = serie + rng.normal(0, 2.5, size=len(serie))
+    serie = np.clip(serie, 40.0, 400.0)
 
-            # Indice da leitura em que a refeicao comeca.
-            idx_inicio = dia * leituras_por_dia + int(hora * 60 / passo_min)
-            if idx_inicio >= n:
-                continue
-
-            # (c.1) Absorcao dos carboidratos: eu modelo o pico como uma curva
-            # que sobe e desce (funcao gama-like) a partir do inicio da refeicao.
-            dur = int(180 / passo_min)  # ~3h de efeito
-            k_idx = np.arange(dur)
-            forma = (k_idx / 6.0) * np.exp(-k_idx / 9.0)  # sobe e decai
-            forma = forma / (forma.max() + 1e-9)
-            fim = min(idx_inicio + dur, n)
-            refeicoes[idx_inicio:fim] += tamanho * forma[: fim - idx_inicio]
-
-            # (c.2) Efeito da insulina (bolus): comeca um pouco depois da
-            # refeicao e puxa a glicose para baixo, tambem como uma curva suave.
-            atraso = int(20 / passo_min)
-            idx_ins = idx_inicio + atraso
-            if idx_ins < n:
-                forma_ins = (k_idx / 8.0) * np.exp(-k_idx / 12.0)
-                forma_ins = forma_ins / (forma_ins.max() + 1e-9)
-                fim_i = min(idx_ins + dur, n)
-                insulina[idx_ins:fim_i] -= (
-                    0.75 * tamanho * forma_ins[: fim_i - idx_ins]
-                )
-
-    # (d) Ruido de sensor: pequenas flutuacoes de medicao a cada leitura.
-    ruido = rng.normal(0, 3.0, size=n)
-
-    # Eu componho o sinal final somando todos os efeitos.
-    glicose = basal + circadiano + refeicoes + insulina + ruido
-
-    # Eu limito a faixa a valores fisiologicamente plausiveis (mg/dL).
-    glicose = np.clip(glicose, 40.0, 400.0)
-
-    df = pd.DataFrame(
-        {
-            "t_min": t_min,
-            "hora_do_dia": hora_do_dia,
-            "glicose": glicose,
-        }
-    )
-    return df
+    # Eu monto um DataFrame com o eixo de tempo para os graficos.
+    t_min = np.arange(len(serie)) * TIME_STEP_MINUTES
+    df = pd.DataFrame({"t_min": t_min, "glicose": serie})
+    meta = pd.DataFrame(registros)
+    return df, meta
 
 
 # =============================================================================
-# 2) JANELAMENTO: TRANSFORMO A SERIE EM EXEMPLOS (X, y) PARA PREVISAO t+k
+# 3) JANELAMENTO: TRANSFORMO A SERIE EM EXEMPLOS (X, y) PARA PREVISAO t+k
 # =============================================================================
 def criar_janelas(serie, tam_janela, k):
     """Eu transformo a serie 1D em pares (janela de entrada, alvo futuro).
@@ -157,15 +281,8 @@ def criar_janelas(serie, tam_janela, k):
     Para cada instante t eu pego as `tam_janela` leituras ANTERIORES (de
     t-tam_janela+1 ate t) como entrada, e o valor em t+k como alvo. Assim o
     modelo aprende a prever a glicose `k` passos a frente a partir do passado.
-
-    Exemplo: tam_janela=24 (2h, se o passo e 5 min) e k=6 (30 min a frente).
-
-    Retorno:
-      X: array (n_amostras, tam_janela) com as janelas de entrada.
-      y: array (n_amostras,) com o alvo em t+k.
     """
     X, y = [], []
-    # Eu paro cedo o suficiente para que o alvo t+k ainda exista na serie.
     for t in range(tam_janela - 1, len(serie) - k):
         janela = serie[t - tam_janela + 1 : t + 1]
         alvo = serie[t + k]
@@ -194,7 +311,7 @@ def dividir_treino_val_teste(X, y, frac_treino=0.70, frac_val=0.15):
 
 
 # =============================================================================
-# 3) MODELOS RECORRENTES: LSTM e GRU
+# 4) MODELOS RECORRENTES: LSTM e GRU
 # =============================================================================
 class RedeRecorrente(nn.Module):
     """Eu defino uma unica classe que serve tanto para LSTM quanto para GRU.
@@ -237,7 +354,7 @@ class RedeRecorrente(nn.Module):
 
 
 # =============================================================================
-# 4) TREINO COM EARLY STOPPING BASEADO NA VALIDACAO
+# 5) TREINO COM EARLY STOPPING BASEADO NA VALIDACAO
 # =============================================================================
 def treinar_modelo(modelo, loaders, lr=1e-3, max_epocas=100, paciencia=12,
                    weight_decay=0.0, verbose=False):
@@ -247,9 +364,6 @@ def treinar_modelo(modelo, loaders, lr=1e-3, max_epocas=100, paciencia=12,
     `paciencia` epocas seguidas, eu interrompo o treino (early stopping) e
     restauro os melhores pesos. Isso evita overfitting e me da a curva de
     aprendizagem que eu mostro no relatorio.
-
-    Retorno:
-      hist: dicionario com as listas de perda de treino e de validacao.
     """
     dl_treino, dl_val = loaders
     modelo = modelo.to(DEVICE)
@@ -318,7 +432,7 @@ def treinar_modelo(modelo, loaders, lr=1e-3, max_epocas=100, paciencia=12,
 
 
 # =============================================================================
-# 5) AVALIACAO: METRICAS DE REGRESSAO + METRICA CLINICA
+# 6) AVALIACAO: METRICAS DE REGRESSAO + METRICA CLINICA
 # =============================================================================
 def prever(modelo, dl):
     """Eu rodo o modelo em um DataLoader e devolvo (previsoes, alvos)."""
@@ -366,19 +480,21 @@ def avaliar(modelo, dl, scaler_y, nome=""):
 
 
 # =============================================================================
-# 6) GRAFICOS PARA O RELATORIO
+# 7) GRAFICOS PARA O RELATORIO
 # =============================================================================
 def plot_serie(df, caminho):
-    """Eu ploto um trecho da serie gerada para ilustrar o dado de entrada."""
+    """Eu ploto um trecho da serie gerada pelo meu simulador."""
     plt.figure(figsize=(11, 4))
-    # Eu mostro so os primeiros 3 dias para dar para enxergar os padroes.
-    leituras_3dias = int(3 * 24 * 60 / 5)
-    trecho = df.iloc[:leituras_3dias]
+    # Eu mostro ~48h para dar para enxergar varios ciclos de refeicao/insulina.
+    n = min(len(df), int(48 * 60 / TIME_STEP_MINUTES))
+    trecho = df.iloc[:n]
     plt.plot(trecho["t_min"] / 60.0, trecho["glicose"], lw=1.0)
     plt.axhspan(70, 180, color="green", alpha=0.08, label="faixa alvo (70-180)")
+    plt.axhline(70, color="red", lw=0.8, ls="--", alpha=0.6)
+    plt.axhline(180, color="orange", lw=0.8, ls="--", alpha=0.6)
     plt.xlabel("tempo (horas)")
     plt.ylabel("glicose (mg/dL)")
-    plt.title("Serie sintetica de glicemia (primeiros 3 dias)")
+    plt.title("Serie de glicemia gerada pelo meu simulador de DM1 (48h)")
     plt.legend(loc="upper right")
     plt.tight_layout()
     plt.savefig(caminho, dpi=130)
@@ -409,6 +525,7 @@ def plot_previsoes(resultados, caminho, n_pontos=300):
     for nome, r in resultados.items():
         plt.plot(r["pred"][:n_pontos], lw=1.3, alpha=0.9,
                  label=f"previsao {nome}")
+    plt.axhspan(70, 180, color="green", alpha=0.06)
     plt.xlabel("passo de tempo (teste)")
     plt.ylabel("glicose (mg/dL)")
     plt.title("Previsao t+k no conjunto de teste")
@@ -438,14 +555,83 @@ def plot_dispersao(resultados, caminho):
     plt.close()
 
 
+def plot_decomposicao_simulador(caminho):
+    """Eu ploto UM bloco de 6h do meu simulador decomposto em seus efeitos.
+
+    Esse grafico e so didatico: ele mostra de onde vem a serie de glicemia que
+    eu uso para treinar a rede. Eu rodo o motor variando um efeito por vez
+    (so carboidrato, so insulina, etc.) para enxergar a contribuicao de cada
+    um, alem da curva final (todos os efeitos somados).
+    """
+    base = inputs_padrao()
+    base["carbs"] = 60.0
+    base["insulin"] = 6.0
+    t = np.arange(PASSOS_POR_SIM + 1) * TIME_STEP_MINUTES / 60.0  # horas
+
+    # Curva final (todos os efeitos juntos).
+    curva_final = calcular_pontos_glicose(base)
+
+    # So carboidrato (zero insulina): mostra a subida pos-refeicao.
+    so_carbo = dict(base); so_carbo["insulin"] = 0.0
+    curva_carbo = calcular_pontos_glicose(so_carbo)
+
+    # So insulina (zero refeicao): mostra a queda provocada pela dose.
+    so_insulina = dict(base); so_insulina["carbs"] = 0.0
+    so_insulina["protein"] = 0.0; so_insulina["fat"] = 0.0
+    curva_insulina = calcular_pontos_glicose(so_insulina)
+
+    plt.figure(figsize=(11, 4.6))
+    plt.plot(t, curva_final, color="#2563eb", lw=2.6, label="glicemia final (tudo)")
+    plt.plot(t, curva_carbo, color="#16a34a", lw=1.6, ls="--",
+             label="so carboidrato (sem insulina)")
+    plt.plot(t, curva_insulina, color="#9333ea", lw=1.6, ls="--",
+             label="so insulina (sem refeicao)")
+    plt.axhspan(70, 180, color="green", alpha=0.07, label="faixa alvo")
+    plt.xlabel("tempo (horas)")
+    plt.ylabel("glicose (mg/dL)")
+    plt.title("Como o meu simulador compoe a glicemia (bloco de 6h)")
+    plt.legend(loc="best", fontsize=9)
+    plt.tight_layout()
+    plt.savefig(caminho, dpi=130)
+    plt.close()
+
+
+def plot_distribuicao_tir(df, caminho):
+    """Eu ploto a distribuicao da glicemia e o Time in Range (TIR).
+
+    TIR (tempo na faixa) e uma metrica clinica central no acompanhamento do
+    DM1: a fracao do tempo em que a glicose fica entre 70 e 180 mg/dL. Aqui eu
+    mostro o histograma com as tres zonas (hipo, alvo, hiper) e os percentuais.
+    """
+    g = df["glicose"].values
+    frac_hipo = float(np.mean(g < 70)) * 100
+    frac_alvo = float(np.mean((g >= 70) & (g <= 180))) * 100
+    frac_hiper = float(np.mean(g > 180)) * 100
+
+    plt.figure(figsize=(11, 4.4))
+    plt.hist(g, bins=60, color="#64748b", alpha=0.75, edgecolor="white")
+    plt.axvspan(40, 70, color="red", alpha=0.10)
+    plt.axvspan(70, 180, color="green", alpha=0.10)
+    plt.axvspan(180, 400, color="orange", alpha=0.10)
+    plt.axvline(70, color="red", ls="--", lw=1)
+    plt.axvline(180, color="orange", ls="--", lw=1)
+    plt.xlabel("glicose (mg/dL)")
+    plt.ylabel("frequencia (leituras)")
+    plt.title(f"Distribuicao da glicemia | Hipo={frac_hipo:.1f}%  "
+              f"Alvo(TIR)={frac_alvo:.1f}%  Hiper={frac_hiper:.1f}%")
+    plt.tight_layout()
+    plt.savefig(caminho, dpi=130)
+    plt.close()
+    return frac_hipo, frac_alvo, frac_hiper
+
+
 # =============================================================================
-# 7) PIPELINE PRINCIPAL
+# 8) PIPELINE PRINCIPAL
 # =============================================================================
 def construir_loaders(Xtr, ytr, Xva, yva, Xte, yte, batch_size=64):
     """Eu monto os DataLoaders do PyTorch a partir dos arrays ja normalizados.
 
-    Eu NAO embaralho treino aqui para nao quebrar a nocao temporal? Na verdade,
-    como cada amostra ja e uma janela independente (X, y), eu POSSO embaralhar
+    Como cada amostra ja e uma janela independente (X, y), eu POSSO embaralhar
     as amostras de treino com seguranca: o vazamento foi evitado la na divisao
     temporal dos blocos. Embaralhar ajuda o gradiente. Val e teste eu mantenho
     em ordem para os graficos ficarem legiveis.
@@ -466,19 +652,33 @@ def main():
     t0 = time.time()
     print("=" * 70)
     print("Projeto 4 - RNNs (LSTM e GRU) | Previsao t+k de glicemia")
+    print("Fonte dos dados: meu simulador de DM1 (portado para Python)")
     print("=" * 70)
 
     # ------------------------------------------------------------------
-    # (A) Eu gero a serie e escolho os parametros do problema.
+    # (A) Eu gero a serie encadeando varias simulacoes de 6h e escolho os
+    #     parametros do problema de previsao.
     # ------------------------------------------------------------------
-    PASSO_MIN = 5          # cada leitura a cada 5 min (como um CGM real)
     TAM_JANELA = 24        # 24 leituras = 2 horas de historico de entrada
     K = 6                  # prevejo 6 passos = 30 min a frente (t+k)
 
-    df = gerar_serie_glicemia(n_dias=60, passo_min=PASSO_MIN, seed=SEED)
-    print(f"Serie gerada: {len(df)} leituras "
-          f"({len(df)*PASSO_MIN/60/24:.0f} dias).")
+    df, meta = gerar_serie_do_simulador(n_blocos=80, seed=SEED)
+    dias = len(df) * TIME_STEP_MINUTES / 60 / 24
+    print(f"Serie gerada: {len(df)} leituras (~{dias:.1f} dias, "
+          f"{len(meta)} blocos de 6h).")
+    print(f"  glicemia: min={df['glicose'].min():.0f} "
+          f"media={df['glicose'].mean():.0f} max={df['glicose'].max():.0f} mg/dL")
     plot_serie(df, os.path.join(FIG_DIR, "01_serie_glicemia.png"))
+
+    # Eu ploto a decomposicao do simulador e a distribuicao/TIR da glicemia.
+    plot_decomposicao_simulador(
+        os.path.join(FIG_DIR, "05_decomposicao_simulador.png"))
+    fh, fa, fhi = plot_distribuicao_tir(
+        df, os.path.join(FIG_DIR, "06_distribuicao_tir.png"))
+    print(f"  Time in Range: hipo={fh:.1f}% | alvo={fa:.1f}% | hiper={fhi:.1f}%")
+
+    # Eu salvo a serie em CSV para quem quiser inspecionar/reproduzir.
+    df.to_csv("serie_glicemia_projeto4.csv", index=False)
 
     # ------------------------------------------------------------------
     # (B) Eu crio as janelas (X, y) para a previsao t+k.
@@ -486,7 +686,7 @@ def main():
     serie = df["glicose"].values.astype(np.float32)
     X, y = criar_janelas(serie, TAM_JANELA, K)
     print(f"Janelas criadas: X={X.shape}, y={y.shape} "
-          f"(janela={TAM_JANELA} passos, k={K} -> {K*PASSO_MIN} min).")
+          f"(janela={TAM_JANELA} passos, k={K} -> {K*TIME_STEP_MINUTES} min).")
 
     # ------------------------------------------------------------------
     # (C) Eu divido em treino/val/teste respeitando a ordem temporal.
@@ -496,8 +696,7 @@ def main():
 
     # ------------------------------------------------------------------
     # (D) Normalizacao SEM VAZAMENTO: eu ajusto o scaler SO no treino e
-    #     aplico (transform) em val e teste. Nunca uso estatisticas do
-    #     futuro (val/teste) para normalizar o passado (treino).
+    #     aplico (transform) em val e teste.
     # ------------------------------------------------------------------
     scaler_X = StandardScaler().fit(Xtr)
     scaler_y = StandardScaler().fit(ytr.reshape(-1, 1))
@@ -511,8 +710,6 @@ def main():
 
     # ------------------------------------------------------------------
     # (E) AJUSTE DE HIPERPARAMETROS usando o conjunto de VALIDACAO.
-    #     Eu faco uma busca em grade pequena e escolho, para LSTM e GRU
-    #     separadamente, a configuracao com menor perda de validacao.
     # ------------------------------------------------------------------
     grade = []
     for hidden in [32, 64]:
@@ -521,7 +718,6 @@ def main():
                 grade.append(dict(hidden_size=hidden, num_layers=n_layers,
                                   lr=lr))
 
-    resultados_busca = {"LSTM": [], "GRU": []}
     melhor_cfg = {"LSTM": None, "GRU": None}
     melhor_val = {"LSTM": float("inf"), "GRU": float("inf")}
 
@@ -531,7 +727,6 @@ def main():
               f"({len(grade)} configuracoes)")
         print("-" * 70)
         for cfg in grade:
-            # Eu re-semeio antes de cada treino para comparacao justa.
             torch.manual_seed(SEED)
             dl_tr, dl_va, dl_te = construir_loaders(
                 Xtr_n, ytr_n, Xva_n, yva_n, Xte_n, yte_n, batch_size=64)
@@ -542,9 +737,8 @@ def main():
                 dropout=0.2)
             hist = treinar_modelo(
                 modelo, (dl_tr, dl_va), lr=cfg["lr"],
-                max_epocas=80, paciencia=10)
+                max_epocas=60, paciencia=8)
             val = hist["melhor_val"]
-            resultados_busca[tipo].append((cfg, val))
             print(f"  hidden={cfg['hidden_size']:>3} "
                   f"layers={cfg['num_layers']} lr={cfg['lr']:<6} "
                   f"-> val_MSE={val:.4f}")
@@ -556,8 +750,7 @@ def main():
               f"(val_MSE={melhor_val[tipo]:.4f})")
 
     # ------------------------------------------------------------------
-    # (F) Eu re-treino os melhores LSTM e GRU e avalio no TESTE (que ate
-    #     agora nunca foi tocado). Guardo as curvas para o relatorio.
+    # (F) Eu re-treino os melhores LSTM e GRU e avalio no TESTE.
     # ------------------------------------------------------------------
     print("\n" + "=" * 70)
     print("Treino final com a melhor configuracao de cada modelo")
@@ -587,9 +780,7 @@ def main():
 
     # ------------------------------------------------------------------
     # (G) Baseline ingenuo: prever que a glicose em t+k e igual a de t.
-    #     Eu uso isso como referencia para mostrar que a rede aprende algo.
     # ------------------------------------------------------------------
-    # A ultima coluna da janela (sem normalizar) e a leitura no instante t.
     base_pred = Xte[:, -1]
     base_rmse = math.sqrt(mean_squared_error(yte, base_pred))
     base_mae = mean_absolute_error(yte, base_pred)
@@ -620,7 +811,13 @@ def main():
     print(f"{'baseline':<10}{base_rmse:>10.2f}{base_mae:>10.2f}"
           f"{'-':>10}{'-':>12}")
 
-    print(f"\nFiguras salvas em: {os.path.abspath(FIG_DIR)}/")
+    print("\n" + "=" * 70)
+    print(f"Figuras salvas em: {os.path.abspath(FIG_DIR)}/")
+    for nome in ["01_serie_glicemia.png", "02_curvas_aprendizagem.png",
+                 "03_previsoes_teste.png", "04_dispersao.png",
+                 "05_decomposicao_simulador.png", "06_distribuicao_tir.png"]:
+        print(f"  - {nome}")
+    print(f"Serie salva em: serie_glicemia_projeto4.csv")
     print(f"Tempo total: {time.time()-t0:.1f}s")
 
 
