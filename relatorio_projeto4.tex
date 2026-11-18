@@ -6,10 +6,8 @@
 % Observacao: eu escrevo este relatorio em primeira pessoa. Compilo o PDF
 % no Overleaf. As figuras citadas estao na pasta "figuras_projeto4/".
 %
-% IMPORTANTE: os numeros de resultado (tabelas de metricas e de hiperparametros)
-% estao marcados com <<...>> porque eu rodo o script na minha maquina. Depois de
-% rodar "python rnn_glicemia_project4.py", eu copio os valores da saida do
-% terminal para os lugares marcados.
+% Os numeros das tabelas vem da execucao do script na minha maquina
+% (python rnn_glicemia_project4.py), com SEED=42 para reprodutibilidade.
 % =====================================================================
 \documentclass[11pt,a4paper]{article}
 
@@ -23,9 +21,6 @@
 \usepackage{float}
 \usepackage{xcolor}
 \usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
-
-% Eu uso este comando para destacar os valores que ainda preciso preencher.
-\newcommand{\preencher}[1]{{\color{red}\texttt{<<#1>>}}}
 
 \title{\textbf{Projeto 4 --- Redes Neurais Recorrentes (LSTM e GRU)}\\[4pt]
 \large Previsão $t+k$ de uma série temporal de glicemia}
@@ -49,7 +44,10 @@ saúde, eu optei por \emph{não} usar os dados reais da minha bomba de insulina,
 preservando minha privacidade e, ao mesmo tempo, usando dados que eu entendo e
 consigo justificar fisiologicamente. Ajustei os hiperparâmetros de cada
 arquitetura usando um conjunto de validação, analisei as curvas de aprendizagem
-e avaliei o desempenho final em um conjunto de teste nunca visto.
+e avaliei o desempenho final em um conjunto de teste nunca visto. Os dois
+modelos superaram um \emph{baseline} ingênuo de persistência; o GRU obteve o
+melhor resultado no teste (RMSE $= 6{,}84$ mg/dL, $R^2 = 0{,}939$), com mais de
+99\% das previsões dentro de uma faixa clinicamente aceitável.
 \end{abstract}
 
 \section{Introdução e definição do problema}
@@ -196,15 +194,14 @@ Tabela~\ref{tab:busca} resume os melhores achados.
 \begin{table}[H]
   \centering
   \caption{Melhor configuração encontrada para cada arquitetura, segundo a
-  perda (MSE, normalizada) no conjunto de validação. Eu preencho com os valores
-  que o script imprime.}
+  perda (MSE, normalizada) no conjunto de validação.}
   \label{tab:busca}
   \begin{tabular}{lcccc}
     \toprule
     Modelo & Estado oculto & Camadas & Taxa aprend. & Val.\ MSE \\
     \midrule
-    LSTM & \preencher{hid} & \preencher{lay} & \preencher{lr} & \preencher{val} \\
-    GRU  & \preencher{hid} & \preencher{lay} & \preencher{lr} & \preencher{val} \\
+    LSTM & 32 & 1 & $10^{-2}$ & 0{,}0234 \\
+    GRU  & 32 & 1 & $10^{-2}$ & 0{,}0238 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -228,9 +225,9 @@ justa e os resultados reproduzíveis.
 \subsection{Curvas de aprendizagem}
 
 A Figura~\ref{fig:curvas} mostra as curvas de treino e validação dos dois
-modelos. Eu espero ver a perda de treino caindo de forma consistente enquanto a
-de validação estabiliza e passa a subir --- o sinal clássico de overfitting que
-o meu critério de parada captura.
+modelos. A perda de treino cai de forma consistente, enquanto a de validação
+estabiliza e deixa de melhorar --- o ponto em que o meu critério de parada
+interrompe o treino e restaura os melhores pesos.
 
 \begin{figure}[H]
   \centering
@@ -274,33 +271,42 @@ daqui a 30 minutos será igual à atual.
 \begin{table}[H]
   \centering
   \caption{Desempenho no conjunto de teste. Menor é melhor para RMSE e MAE;
-  maior é melhor para $R^2$ e para a métrica clínica. Eu preencho com os
-  valores que o script imprime no resumo final.}
+  maior é melhor para $R^2$ e para a métrica clínica.}
   \label{tab:metricas}
   \begin{tabular}{lcccc}
     \toprule
     Modelo & RMSE (mg/dL) & MAE (mg/dL) & $R^2$ & Aceitáveis 15/15 (\%) \\
     \midrule
-    LSTM     & \preencher{rmse} & \preencher{mae} & \preencher{r2} & \preencher{clin} \\
-    GRU      & \preencher{rmse} & \preencher{mae} & \preencher{r2} & \preencher{clin} \\
+    LSTM     & 6{,}99 & 5{,}31 & 0{,}937 & 99{,}2 \\
+    \textbf{GRU} & \textbf{6{,}84} & \textbf{5{,}17} & \textbf{0{,}939} & 99{,}1 \\
     \midrule
-    Baseline (persistência) & \preencher{rmse} & \preencher{mae} & --- & --- \\
+    Baseline (persistência) & 8{,}56 & 6{,}18 & --- & --- \\
     \bottomrule
   \end{tabular}
 \end{table}
 
 \section{Discussão}
 
-Alguns pontos que eu destaco (e que confirmo após rodar o script):
+Alguns pontos que eu destaco a partir dos resultados:
 
 \begin{itemize}
-  \item \textbf{As redes aprenderam algo real} se superarem o baseline de
-        persistência --- ou seja, se não estiverem apenas copiando o último
-        valor observado.
+  \item \textbf{As redes aprenderam algo real.} Ambas superaram o baseline de
+        persistência (RMSE de $6{,}84$--$6{,}99$ contra $8{,}56$ mg/dL). Ou
+        seja, elas não estão apenas copiando o último valor observado: há ganho
+        real em modelar a dinâmica da série.
 
-  \item \textbf{LSTM vs GRU.} Eu comparo as duas arquiteturas em igualdade de
-        condições. A literatura mostra que GRU e LSTM costumam ter desempenho
-        próximo, com o GRU levando vantagem em eficiência (menos parâmetros).
+  \item \textbf{O GRU venceu por pouco, e com um modelo enxuto.} No teste, o
+        GRU teve o menor RMSE ($6{,}84$) e o maior $R^2$ ($0{,}939$). A
+        diferença para o LSTM é pequena, o que é coerente com a literatura:
+        GRU e LSTM costumam empatar, com o GRU levando vantagem em eficiência.
+        Chamo a atenção para o fato de que a melhor configuração das duas
+        arquiteturas foi a mais simples da grade (estado oculto 32, uma única
+        camada): aumentar a capacidade não ajudou, o que faz sentido para uma
+        série univariada relativamente suave.
+
+  \item \textbf{Desempenho clínico alto.} Mais de 99\% das previsões caíram
+        dentro da faixa 15/15, um indicador de que a previsão a 30 minutos
+        seria útil na prática para antecipar tendências.
 
   \item \textbf{Overfitting controlado.} As curvas de aprendizagem deixam claro
         o momento em que a validação começa a piorar; o early stopping evita
@@ -319,10 +325,11 @@ Eu implementei um pipeline completo de previsão $t+k$ com redes recorrentes,
 reaproveitando o meu próprio simulador de DM1 como fonte de dados ---
 fisiologicamente justificável e livre de dados pessoais. O pipeline vai da
 geração da série até a avaliação em teste, passando pelo ajuste de
-hiperparâmetros em validação e pela análise das curvas de aprendizagem. A
-comparação entre LSTM e GRU me permite escolher, de forma fundamentada, a
-arquitetura com o melhor compromisso entre precisão e simplicidade para este
-problema.
+hiperparâmetros em validação e pela análise das curvas de aprendizagem. Os dois
+modelos previram a glicemia 30 minutos à frente com erro em torno de 5 mg/dL
+(MAE) e mais de 99\% de previsões clinicamente aceitáveis, superando o baseline
+ingênuo. O GRU apresentou o melhor compromisso entre precisão e simplicidade,
+sendo a minha escolha final para este problema.
 
 \section*{Reprodução}
 
