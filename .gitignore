@@ -4,9 +4,10 @@
 __pycache__/
 *.pyc
 
-# Projeto 2 - artefatos de validacao (imagens que NAO entram no projeto)
+# Projeto 2 - artefatos de validacao locais (imagens que NAO entram no projeto)
+# Obs: a pasta projeto3-vae/resultados/ e versionada (figuras do relatorio) e
+# por isso NAO esta coberta por estes padroes genericos de artefato local.
 imagens_teste/
-resultados/
 resultados_img02/
 
 # Artefatos de compilacao LaTeX
